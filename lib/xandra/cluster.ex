@@ -479,6 +479,10 @@ defmodule Xandra.Cluster do
     options = Keyword.merge(options, address: address, port: port)
     child_spec = Supervisor.child_spec({Xandra, options}, id: address)
 
+    Logger.info(fn ->
+      "Connecting to child_spec #{inspect(child_spec)}"
+    end)
+
     case Supervisor.start_child(pool_supervisor, child_spec) do
       {:ok, pool} ->
         _ = Logger.debug("Started connection to #{inspect(address)}")
