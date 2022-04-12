@@ -34,6 +34,12 @@ defmodule Xandra.PageStream do
         %Page{paging_state: paging_state} = page ->
           options = Keyword.put(options, :paging_state, paging_state)
           {[page], %{page_stream | options: options}}
+
+        %Xandra.Void{} = void ->
+          {[void], %{page_stream | state: :done}}
+
+        %Xandra.SchemaChange{} = schema_change ->
+          {[schema_change], %{page_stream | state: :done}}
       end
     end
 
