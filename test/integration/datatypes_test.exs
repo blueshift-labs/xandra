@@ -5,24 +5,24 @@ defmodule DataTypesTest do
     statement = """
     CREATE TABLE primitives
     (id int PRIMARY KEY,
-     ascii ascii,
-     bigint bigint,
-     blob blob,
-     boolean boolean,
-     decimal decimal,
-     double double,
-     float float,
-     inet inet,
-     int int,
-     smallint smallint,
-     text text,
-     time time,
-     timestamp timestamp,
-     timeuuid timeuuid,
-     tinyint tinyint,
-     uuid uuid,
-     varchar varchar,
-     varint varint)
+     ascii_field ascii,
+     bigint_field bigint,
+     blob_field blob,
+     boolean_field boolean,
+     decimal_field decimal,
+     double_field double,
+     float_field float,
+     inet_field inet,
+     int_field int,
+     smallint_field smallint,
+     text_field text,
+     time_field time,
+     timestamp_field timestamp,
+     timeuuid_field timeuuid,
+     tinyint_field tinyint,
+     uuid_field uuid,
+     varchar_field varchar,
+     varint_field varint)
     """
 
     Xandra.execute!(conn, statement)
@@ -30,22 +30,22 @@ defmodule DataTypesTest do
     statement = """
     INSERT INTO primitives
     (id,
-     ascii,
-     bigint,
-     blob,
-     boolean,
-     decimal,
-     double,
-     float,
-     inet,
-     int,
-     smallint,
-     text,
-     timeuuid,
-     tinyint,
-     uuid,
-     varchar,
-     varint)
+     ascii_field,
+     bigint_field,
+     blob_field,
+     boolean_field,
+     decimal_field,
+     double_field,
+     float_field,
+     inet_field,
+     int_field,
+     smallint_field,
+     text_field,
+     timeuuid_field,
+     tinyint_field,
+     uuid_field,
+     varchar_field,
+     varint_field)
     VALUES
     (#{"?" |> List.duplicate(17) |> Enum.join(", ")})
     """
@@ -74,22 +74,22 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM primitives WHERE id = 1")
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 1
-    assert Map.fetch!(row, "ascii") == nil
-    assert Map.fetch!(row, "bigint") == nil
-    assert Map.fetch!(row, "blob") == nil
-    assert Map.fetch!(row, "boolean") == nil
-    assert Map.fetch!(row, "decimal") == nil
-    assert Map.fetch!(row, "double") == nil
-    assert Map.fetch!(row, "float") == nil
-    assert Map.fetch!(row, "inet") == nil
-    assert Map.fetch!(row, "int") == nil
-    assert Map.fetch!(row, "smallint") == nil
-    assert Map.fetch!(row, "text") == nil
-    assert Map.fetch!(row, "timeuuid") == nil
-    assert Map.fetch!(row, "tinyint") == nil
-    assert Map.fetch!(row, "uuid") == nil
-    assert Map.fetch!(row, "varchar") == nil
-    assert Map.fetch!(row, "varint") == nil
+    assert Map.fetch!(row, "ascii_field") == nil
+    assert Map.fetch!(row, "bigint_field") == nil
+    assert Map.fetch!(row, "blob_field") == nil
+    assert Map.fetch!(row, "boolean_field") == nil
+    assert Map.fetch!(row, "decimal_field") == nil
+    assert Map.fetch!(row, "double_field") == nil
+    assert Map.fetch!(row, "float_field") == nil
+    assert Map.fetch!(row, "inet_field") == nil
+    assert Map.fetch!(row, "int_field") == nil
+    assert Map.fetch!(row, "smallint_field") == nil
+    assert Map.fetch!(row, "text_field") == nil
+    assert Map.fetch!(row, "timeuuid_field") == nil
+    assert Map.fetch!(row, "tinyint_field") == nil
+    assert Map.fetch!(row, "uuid_field") == nil
+    assert Map.fetch!(row, "varchar_field") == nil
+    assert Map.fetch!(row, "varint_field") == nil
 
     values = [
       {"int", 2},
@@ -114,32 +114,32 @@ defmodule DataTypesTest do
     Xandra.execute!(conn, statement, values)
     page = Xandra.execute!(conn, "SELECT * FROM primitives WHERE id = 2")
     assert [row] = Enum.to_list(page)
-    assert Map.fetch!(row, "ascii") == "ascii"
-    assert Map.fetch!(row, "bigint") == -1_000_000_000
-    assert Map.fetch!(row, "blob") == <<0, 0xFF>>
-    assert Map.fetch!(row, "boolean") == true
-    assert Map.fetch!(row, "decimal") == {1323, -2}
-    assert Map.fetch!(row, "double") == 3.1415
-    assert Map.fetch!(row, "float") == -1.25
-    assert Map.fetch!(row, "inet") == {192, 168, 0, 1}
-    assert Map.fetch!(row, "int") == -42
-    assert Map.fetch!(row, "smallint") == -33
-    assert Map.fetch!(row, "text") == "эликсир"
-    assert Map.fetch!(row, "timeuuid") == "fe2b4360-28c6-11e2-81c1-0800200c9a66"
-    assert Map.fetch!(row, "tinyint") == -21
-    assert Map.fetch!(row, "uuid") == "00b69180-d0e1-11e2-8b8b-0800200c9a66"
-    assert Map.fetch!(row, "varchar") == "тоже эликсир"
-    assert Map.fetch!(row, "varint") == -6_789_065_678_192_312_391_879_827_349
+    assert Map.fetch!(row, "ascii_field") == "ascii"
+    assert Map.fetch!(row, "bigint_field") == -1_000_000_000
+    assert Map.fetch!(row, "blob_field") == <<0, 0xFF>>
+    assert Map.fetch!(row, "boolean_field") == true
+    assert Map.fetch!(row, "decimal_field") == {1323, -2}
+    assert Map.fetch!(row, "double_field") == 3.1415
+    assert Map.fetch!(row, "float_field") == -1.25
+    assert Map.fetch!(row, "inet_field") == {192, 168, 0, 1}
+    assert Map.fetch!(row, "int_field") == -42
+    assert Map.fetch!(row, "smallint_field") == -33
+    assert Map.fetch!(row, "text_field") == "эликсир"
+    assert Map.fetch!(row, "timeuuid_field") == "fe2b4360-28c6-11e2-81c1-0800200c9a66"
+    assert Map.fetch!(row, "tinyint_field") == -21
+    assert Map.fetch!(row, "uuid_field") == "00b69180-d0e1-11e2-8b8b-0800200c9a66"
+    assert Map.fetch!(row, "varchar_field") == "тоже эликсир"
+    assert Map.fetch!(row, "varint_field") == -6_789_065_678_192_312_391_879_827_349
   end
 
   test "zero-byte value for string types", %{conn: conn} do
     statement = """
     CREATE TABLE string_with_zero_bytes
     (id int PRIMARY KEY,
-     ascii ascii,
-     blob blob,
-     text text,
-     varchar varchar)
+     ascii_field ascii,
+     blob_field blob,
+     text_field text,
+     varchar_field varchar)
     """
 
     Xandra.execute!(conn, statement)
@@ -147,10 +147,10 @@ defmodule DataTypesTest do
     statement = """
     INSERT INTO string_with_zero_bytes
     (id,
-     ascii,
-     blob,
-     text,
-     varchar)
+     ascii_field,
+     blob_field,
+     text_field,
+     varchar_field)
     VALUES
     (#{"?" |> List.duplicate(5) |> Enum.join(", ")})
     """
@@ -167,19 +167,19 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM string_with_zero_bytes WHERE id = 1")
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 1
-    assert Map.fetch!(row, "ascii") == ""
-    assert Map.fetch!(row, "blob") == ""
-    assert Map.fetch!(row, "text") == ""
-    assert Map.fetch!(row, "varchar") == ""
+    assert Map.fetch!(row, "ascii_field") == ""
+    assert Map.fetch!(row, "blob_field") == ""
+    assert Map.fetch!(row, "text_field") == ""
+    assert Map.fetch!(row, "varchar_field") == ""
   end
 
   test "calendar types", %{conn: conn} do
     statement = """
     CREATE TABLE festivities
     (id int PRIMARY KEY,
-     date date,
-     time time,
-     timestamp timestamp)
+     date_field date,
+     time_field time,
+     timestamp_field timestamp)
     """
 
     Xandra.execute!(conn, statement)
@@ -187,9 +187,9 @@ defmodule DataTypesTest do
     statement = """
     INSERT INTO festivities
     (id,
-     date,
-     time,
-     timestamp)
+     date_field,
+     time_field,
+     timestamp_field)
     VALUES
     (#{"?" |> List.duplicate(4) |> Enum.join(", ")})
     """
@@ -205,9 +205,9 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM festivities WHERE id = 1")
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 1
-    assert Map.fetch!(row, "date") == nil
-    assert Map.fetch!(row, "time") == nil
-    assert Map.fetch!(row, "timestamp") == nil
+    assert Map.fetch!(row, "date_field") == nil
+    assert Map.fetch!(row, "time_field") == nil
+    assert Map.fetch!(row, "timestamp_field") == nil
 
     datetime = DateTime.from_naive!(~N[2016-05-24 13:26:08.003], "Etc/UTC")
 
@@ -222,9 +222,9 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM festivities WHERE id = 2")
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 2
-    assert Map.fetch!(row, "date") == ~D[2017-09-11]
-    assert Map.fetch!(row, "time") == ~T[20:13:50.000004]
-    assert Map.fetch!(row, "timestamp") == datetime
+    assert Map.fetch!(row, "date_field") == ~D[2017-09-11]
+    assert Map.fetch!(row, "time_field") == ~T[20:13:50.000004]
+    assert Map.fetch!(row, "timestamp_field") == datetime
 
     values = [
       {"int", 3},
@@ -244,20 +244,20 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM festivities WHERE id = 3", [], options)
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 3
-    assert Map.fetch!(row, "date") == 1_358_013_521
-    assert Map.fetch!(row, "time") == 1_358_013_521
-    assert Map.fetch!(row, "timestamp") == -2_167_219_200
+    assert Map.fetch!(row, "date_field") == 1_358_013_521
+    assert Map.fetch!(row, "time_field") == 1_358_013_521
+    assert Map.fetch!(row, "timestamp_field") == -2_167_219_200
   end
 
   test "decimal type with formats", %{conn: conn} do
     statement = """
-    CREATE TABLE decs (id int PRIMARY KEY, decimal decimal)
+    CREATE TABLE decs (id int PRIMARY KEY, decimal_field decimal)
     """
 
     Xandra.execute!(conn, statement)
 
     statement = """
-    INSERT INTO decs (id, decimal) VALUES (?, ?)
+    INSERT INTO decs (id, decimal_field) VALUES (?, ?)
     """
 
     # 95.343
@@ -273,7 +273,7 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM decs WHERE id = 1")
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 1
-    assert Map.fetch!(row, "decimal") == decimal_as_tuple
+    assert Map.fetch!(row, "decimal_field") == decimal_as_tuple
 
     # 95.343
     decimal_as_decimal = Decimal.new(1, 95343, -3)
@@ -288,12 +288,12 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM decs WHERE id = 2", [], decimal_format: :decimal)
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 2
-    assert Map.fetch!(row, "decimal") == Decimal.new(1, 95343, -3)
+    assert Map.fetch!(row, "decimal_field") == Decimal.new(1, 95343, -3)
 
     page = Xandra.execute!(conn, "SELECT * FROM decs WHERE id = 2", [], decimal_format: :tuple)
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 2
-    assert Map.fetch!(row, "decimal") == decimal_as_tuple
+    assert Map.fetch!(row, "decimal_field") == decimal_as_tuple
 
     # -5.0
     negative_decimal = Decimal.new("-5.0")
@@ -308,19 +308,19 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM decs WHERE id = 3", [], decimal_format: :decimal)
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 3
-    assert Map.fetch!(row, "decimal") == Decimal.new("-5.0")
-    assert row |> Map.fetch!("decimal") |> Decimal.negative?()
+    assert Map.fetch!(row, "decimal_field") == Decimal.new("-5.0")
+    assert row |> Map.fetch!("decimal_field") |> Decimal.negative?()
   end
 
   test "uuid/timeuuid types with format", %{conn: conn} do
     statement = """
-    CREATE TABLE uuids (id int PRIMARY KEY, uuid uuid, timeuuid timeuuid)
+    CREATE TABLE uuids (id int PRIMARY KEY, uuid_field uuid, timeuuid_field timeuuid)
     """
 
     Xandra.execute!(conn, statement)
 
     statement = """
-    INSERT INTO uuids (id, uuid, timeuuid) VALUES (?, ?, ?)
+    INSERT INTO uuids (id, uuid_field, timeuuid_field) VALUES (?, ?, ?)
     """
 
     uuid_as_binary = <<0, 182, 145, 128, 208, 225, 17, 226, 139, 139, 8, 0, 32, 12, 154, 102>>
@@ -338,8 +338,8 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM uuids WHERE id = 1", [], options)
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 1
-    assert Map.fetch!(row, "uuid") == uuid_as_binary
-    assert Map.fetch!(row, "timeuuid") == timeuuid_as_binary
+    assert Map.fetch!(row, "uuid_field") == uuid_as_binary
+    assert Map.fetch!(row, "timeuuid_field") == timeuuid_as_binary
 
     uuid_as_string = "fe2b4360-28c6-11e2-81c1-0800200c9a66"
     timeuuid_as_string = "fe2b4360-28c6-11e2-81c1-0800200c9a67"
@@ -356,8 +356,8 @@ defmodule DataTypesTest do
     page = Xandra.execute!(conn, "SELECT * FROM uuids WHERE id = 2", [], options)
     assert [row] = Enum.to_list(page)
     assert Map.fetch!(row, "id") == 2
-    assert Map.fetch!(row, "uuid") == uuid_as_string
-    assert Map.fetch!(row, "timeuuid") == timeuuid_as_string
+    assert Map.fetch!(row, "uuid_field") == uuid_as_string
+    assert Map.fetch!(row, "timeuuid_field") == timeuuid_as_string
   end
 
   test "collection datatypes", %{conn: conn} do
