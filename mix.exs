@@ -78,7 +78,7 @@ defmodule Xandra.Mixfile do
   defp deps() do
     [
       {:db_connection, "~> 2.0"},
-      {:decimal, "~> 1.7", optional: true},
+      {:decimal, "~> 2.0", optional: true},
       {:nimble_options, "~> 0.4.0"},
       {:telemetry, "~> 0.4.3 or ~> 1.0"},
 
