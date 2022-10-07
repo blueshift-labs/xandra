@@ -1,7 +1,7 @@
 defmodule Xandra.Protocol.V3 do
   @moduledoc false
 
-  use Bitwise
+  import Bitwise
 
   require Decimal
 
