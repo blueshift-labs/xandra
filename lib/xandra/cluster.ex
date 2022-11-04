@@ -615,11 +615,12 @@ defmodule Xandra.Cluster do
     pool_spec =
       Supervisor.child_spec({state.xandra_mod, options}, id: peername, restart: :transient)
 
-    # TODO: handle other return values
     case Supervisor.start_child(state.pool_supervisor, pool_spec) do
       {:ok, pool} ->
         _ = Logger.debug("Started connection pool to #{peername_to_string(peername)}")
         put_in(state.pools[peername], pool)
+      {:error, {:already_started, _pool}} ->
+        state
     end
   end
 
