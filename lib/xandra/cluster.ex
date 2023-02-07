@@ -80,7 +80,7 @@ defmodule Xandra.Cluster do
 
   use GenServer
 
-  alias Xandra.Cluster.{ControlConnection, StatusChange, TopologyChange}
+  alias Xandra.Cluster.{ControlConnection, StatusChange, TopologyChange, Node}
   alias Xandra.{Batch, ConnectionError, Prepared, RetryStrategy}
 
   require Logger
@@ -182,7 +182,7 @@ defmodule Xandra.Cluster do
     ],
 
     # Internal for testing, not exposed.
-    xandra_module: [type: :atom, default: Xandra, doc: false],
+    xandra_module: [type: :atom, default: Xandra.Cluster.Node, doc: false],
     control_connection_module: [type: :atom, default: ControlConnection, doc: false]
   ]
 
@@ -619,6 +619,7 @@ defmodule Xandra.Cluster do
       {:ok, pool} ->
         _ = Logger.debug("Started connection pool to #{peername_to_string(peername)}")
         put_in(state.pools[peername], pool)
+
       {:error, {:already_started, _pool}} ->
         state
     end
@@ -716,11 +717,14 @@ defmodule Xandra.Cluster do
 
   defp select_pool(:random, pools, _node_refs) do
     {_address, pool} = Enum.random(pools)
-    pool
+    Node.get_conn(pool)
   end
 
   defp select_pool(:priority, pools, node_refs) do
-    Enum.find_value(node_refs, fn node_ref(peername: peername) -> Map.get(pools, peername) end)
+    pool =
+      Enum.find_value(node_refs, fn node_ref(peername: peername) -> Map.get(pools, peername) end)
+
+    Node.get_conn(pool)
   end
 
   defp peername_to_string({ip, port} = peername) when is_peername(peername) do
