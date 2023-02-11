@@ -80,7 +80,7 @@ defmodule Xandra.Cluster do
 
   use GenServer
 
-  alias Xandra.Cluster.{ControlConnection, StatusChange, TopologyChange}
+  alias Xandra.Cluster.{ControlConnection, StatusChange, TopologyChange, Host}
   alias Xandra.{Batch, ConnectionError, Prepared, RetryStrategy}
 
   require Logger
@@ -127,6 +127,8 @@ defmodule Xandra.Cluster do
     # it ordered in order to support the :priority strategy,
     # which runs a query through the same order of nodes every time.
     node_refs: [],
+    cluster_name: nil,
+    host_info: nil,
 
     # Modules to swap processes when testing.
     xandra_mod: nil,
@@ -135,7 +137,7 @@ defmodule Xandra.Cluster do
 
   start_link_opts_schema = [
     load_balancing: [
-      type: {:in, [:priority, :random]},
+      type: {:in, [:priority, :random, :token_aware]},
       default: :random,
       doc: """
       Load balancing "strategy". Either `:random` or `:priority`. See the "Load balancing
@@ -252,22 +254,27 @@ defmodule Xandra.Cluster do
             "the :priority load balancing strategy is only supported when :autodiscovery is false"
     end
 
+    autodiscovery =
+      if cluster_opts[:load_balancing] == :token_aware do
+        true
+      else
+        Keyword.fetch!(cluster_opts, :autodiscovery)
+      end
+
+    cluster_name = Keyword.get(cluster_opts, :name, :default)
+    name = String.to_atom("xandra.cluster.#{cluster_name}")
+
     state = %__MODULE__{
+      cluster_name: cluster_name,
       pool_options: pool_opts,
       load_balancing: Keyword.fetch!(cluster_opts, :load_balancing),
-      autodiscovery: Keyword.fetch!(cluster_opts, :autodiscovery),
+      autodiscovery: autodiscovery,
       autodiscovered_nodes_port: Keyword.fetch!(cluster_opts, :autodiscovered_nodes_port),
       xandra_mod: Keyword.fetch!(cluster_opts, :xandra_module),
       control_conn_mod: Keyword.fetch!(cluster_opts, :control_connection_module)
     }
 
-    genserver_opts =
-      case Keyword.fetch(cluster_opts, :name) do
-        {:ok, name} -> [name: name]
-        :error -> []
-      end
-
-    GenServer.start_link(__MODULE__, {state, nodes}, genserver_opts)
+    GenServer.start_link(__MODULE__, {state, nodes}, name: name)
   end
 
   # Used internally by Xandra.Cluster.ControlConnection.
@@ -286,6 +293,12 @@ defmodule Xandra.Cluster do
   @doc false
   def discovered_peers(cluster, peers, source_control_conn) do
     GenServer.cast(cluster, {:discovered_peers, peers, source_control_conn})
+  end
+
+  # Used internally by Xandra.Cluster.ControlConnection.
+  @doc false
+  def local_info(cluster, local_info) do
+    GenServer.cast(cluster, {:local_info, local_info})
   end
 
   @doc """
@@ -478,10 +491,13 @@ defmodule Xandra.Cluster do
     {:ok, control_conn_sup} = Supervisor.start_link([], strategy: :one_for_one)
     {:ok, pool_sup} = Supervisor.start_link([], strategy: :one_for_one)
 
+    host_info = :ets.new(:host_info, [:set])
+
     state = %__MODULE__{
       state
       | control_conn_supervisor: control_conn_sup,
-        pool_supervisor: pool_sup
+        pool_supervisor: pool_sup,
+        host_info: host_info
     }
 
     state = start_control_connections(state, nodes)
@@ -560,6 +576,12 @@ defmodule Xandra.Cluster do
     {:noreply, state}
   end
 
+  def handle_cast({:local_info, local_info}, %__MODULE__{host_info: host_info} = state) do
+    host = Host.from_map(local_info)
+    :ets.insert(host_info, {host.host_id, host})
+    {:noreply, state}
+  end
+
   def handle_cast({:update, {:control_connection_established, address}}, %__MODULE__{} = state) do
     state = restart_pool(state, address)
     {:noreply, state}
@@ -619,6 +641,7 @@ defmodule Xandra.Cluster do
       {:ok, pool} ->
         _ = Logger.debug("Started connection pool to #{peername_to_string(peername)}")
         put_in(state.pools[peername], pool)
+
       {:error, {:already_started, _pool}} ->
         state
     end

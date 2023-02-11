@@ -9,7 +9,18 @@ defmodule Xandra.Cluster.ControlConnection do
 
   @default_backoff 5_000
   @default_timeout 5_000
+  @default_token_refresh_interval 300_000
   @forced_transport_options [packet: :raw, mode: :binary, active: false]
+  @system_local_query %Simple{
+    statement: "SELECT * FROM system.local",
+    values: [],
+    default_consistency: :one
+  }
+  @system_peers_query %Simple{
+    statement: "SELECT * FROM system.peers",
+    values: [],
+    default_consistency: :one
+  }
 
   # Internal NimbleOptions schema used to validate the options given to start_link/1.
   # This is only used for internal consistency and having an additional layer of
@@ -36,6 +47,7 @@ defmodule Xandra.Cluster.ControlConnection do
     :socket,
     :options,
     :autodiscovery,
+    :token_refresh_interval,
     :protocol_module,
     :peername,
     new: true,
@@ -68,6 +80,8 @@ defmodule Xandra.Cluster.ControlConnection do
       address: Keyword.fetch!(options, :address),
       port: Keyword.fetch!(options, :port),
       autodiscovery: Keyword.fetch!(options, :autodiscovery),
+      token_refresh_interval:
+        Keyword.get(options, :token_refresh_interval, @default_token_refresh_interval),
       options: connection_options,
       transport: transport,
       transport_options: transport_options
@@ -79,8 +93,10 @@ defmodule Xandra.Cluster.ControlConnection do
   ## Callbacks
 
   @impl :gen_statem
-  def init(data) do
+  def init(%{token_refresh_interval: token_refresh_interval} = data) do
     Logger.debug("Started control connection process (#{inspect(data.address)})")
+
+    Process.send_after(self(), :token_refresh, token_refresh_interval)
     {:ok, :disconnected, data, {:next_event, :internal, :connect}}
   end
 
@@ -107,15 +123,19 @@ defmodule Xandra.Cluster.ControlConnection do
              data = %__MODULE__{data | protocol_module: protocol_module},
              :ok <-
                startup_connection(transport, socket, supported_options, protocol_module, options),
-             {:ok, peers_or_nil} <-
+             {:ok, system_local, system_peers} <-
                maybe_discover_peers(data.autodiscovery, transport, socket, protocol_module),
              :ok <- register_to_events(transport, socket, protocol_module),
              :ok <- inet_mod(transport).setopts(socket, active: true) do
           Logger.debug("Established control connection (protocol #{inspect(protocol_module)})")
           {:ok, data} = report_active(data)
 
-          if not is_nil(peers_or_nil) do
-            report_peers(data, peers_or_nil)
+          if system_local do
+            report_local(data, system_local)
+          end
+
+          if system_peers do
+            report_peers(data, system_peers)
           end
 
           {:next_state, :connected, data}
@@ -160,6 +180,11 @@ defmodule Xandra.Cluster.ControlConnection do
   # be safely ignored.
   def disconnected(:info, {kind, socket}, %__MODULE__{socket: socket})
       when kind in [:tcp_closed, :ssl_closed] do
+    :keep_state_and_data
+  end
+
+  def disconnected(:info, :token_refresh, %{token_refresh_interval: token_refresh_interval}) do
+    Process.send_after(self(), :token_refresh, token_refresh_interval)
     :keep_state_and_data
   end
 
@@ -219,9 +244,13 @@ defmodule Xandra.Cluster.ControlConnection do
     {:ok, data}
   end
 
-  defp report_peers(state, peers) do
+  defp report_peers(state, system_peers) do
     source = address_to_human_readable_source(state)
-    :ok = Xandra.Cluster.discovered_peers(state.cluster, peers, source)
+    :ok = Xandra.Cluster.discovered_peers(state.cluster, system_peers, source)
+  end
+
+  defp report_local(state, system_local) do
+    :ok = Xandra.Cluster.local_info(state.cluster, system_local)
   end
 
   defp startup_connection(transport, socket, supported_options, protocol_module, options) do
@@ -249,39 +278,33 @@ defmodule Xandra.Cluster.ControlConnection do
   end
 
   defp maybe_discover_peers(_autodiscovery? = false, _transport, _socket, _protocol_module) do
-    {:ok, _peers = nil}
+    {:ok, _system_local = nil, _system_peers = nil}
   end
 
   defp maybe_discover_peers(_autodiscovery? = true, transport, socket, protocol_module) do
     # Discover the peers in the same data center as the node we're connected to.
-    with {:ok, local_info} <- fetch_node_local_info(transport, socket, protocol_module),
-         local_data_center = Map.fetch!(local_info, "data_center"),
-         {:ok, peers} <- discover_peers(transport, socket, protocol_module) do
+    with {:ok, system_local} <- fetch_node_local_info(transport, socket, protocol_module),
+         local_data_center = Map.fetch!(system_local, "data_center"),
+         {:ok, system_peers} <- discover_peers(transport, socket, protocol_module) do
       # We filter out the peers with null host_id because they seem to be nodes that are down or
       # decommissioned but not removed from the cluster. See
       # https://github.com/lexhide/xandra/pull/196 and
       # https://user.cassandra.apache.narkive.com/APRtj5hb/system-peers-and-decommissioned-nodes.
-      peers =
+      system_peers =
         for %{"host_id" => host_id, "data_center" => data_center, "rpc_address" => address} <-
-              peers,
+              system_peers,
             not is_nil(host_id),
             data_center == local_data_center,
             do: address
 
-      {:ok, peers}
+      {:ok, system_local, system_peers}
     end
   end
 
   defp fetch_node_local_info(transport, socket, protocol_module) do
-    query = %Simple{
-      statement: "SELECT data_center FROM system.local",
-      values: [],
-      default_consistency: :one
-    }
-
     payload =
       Frame.new(:query, _options = [])
-      |> protocol_module.encode_request(query)
+      |> protocol_module.encode_request(@system_local_query)
       |> Frame.encode(protocol_module)
 
     protocol_format = Xandra.Protocol.frame_protocol_format(protocol_module)
@@ -289,22 +312,18 @@ defmodule Xandra.Cluster.ControlConnection do
     with :ok <- transport.send(socket, payload),
          {:ok, %Frame{} = frame} <-
            Utils.recv_frame(transport, socket, protocol_format, _compressor = nil) do
-      {%Xandra.Page{} = page, _warnings} = protocol_module.decode_response(frame, query)
+      {%Xandra.Page{} = page, _warnings} =
+        protocol_module.decode_response(frame, @system_local_query)
+
       [local_info] = Enum.to_list(page)
       {:ok, local_info}
     end
   end
 
   defp discover_peers(transport, socket, protocol_module) do
-    query = %Simple{
-      statement: "SELECT host_id, rpc_address, data_center FROM system.peers",
-      values: [],
-      default_consistency: :one
-    }
-
     payload =
       Frame.new(:query, _options = [])
-      |> protocol_module.encode_request(query)
+      |> protocol_module.encode_request(@system_peers_query)
       |> Frame.encode(protocol_module)
 
     protocol_format = Xandra.Protocol.frame_protocol_format(protocol_module)
@@ -312,13 +331,24 @@ defmodule Xandra.Cluster.ControlConnection do
     with :ok <- transport.send(socket, payload),
          {:ok, %Frame{} = frame} <-
            Utils.recv_frame(transport, socket, protocol_format, _compressor = nil) do
-      {%Xandra.Page{} = page, _warnings} = protocol_module.decode_response(frame, query)
+      {%Xandra.Page{} = page, _warnings} =
+        protocol_module.decode_response(frame, @system_peers_query)
+
       {:ok, Enum.to_list(page)}
     end
   end
 
   defp consume_new_data(%__MODULE__{cluster: cluster} = data) do
     case decode_frame(data.buffer) do
+      {%Frame{kind: :result} = frame, rest} ->
+        {page, _warnings} = data.protocol_module.decode_response(frame, @system_local_query)
+        [local_info] = Enum.to_list(page)
+        Logger.debug("Received local_info: #{inspect(local_info)}")
+        report_local(data, local_info)
+        Process.send_after(self(), :token_refresh, data.token_refresh_interval)
+
+        consume_new_data(%__MODULE__{data | buffer: rest})
+
       {frame, rest} ->
         {change_event, _warnings} = data.protocol_module.decode_response(frame)
         Logger.debug("Received event: #{inspect(change_event)}")

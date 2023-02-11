@@ -54,7 +54,10 @@ defmodule Xandra.Mixfile do
   end
 
   def application() do
-    [extra_applications: [:logger]]
+    [
+      extra_applications: [:logger],
+      mod: {Xandra.Cluster.Application, []}
+    ]
   end
 
   defp elixirc_paths(:test), do: ["test/support"] ++ elixirc_paths(:dev)
@@ -77,7 +80,8 @@ defmodule Xandra.Mixfile do
 
   defp deps() do
     [
-      {:db_connection, "~> 2.0"},
+      # {:db_connection, "~> 2.0"},
+      {:db_connection, path: "../db_connection", override: true},
       {:decimal, "~> 2.0", optional: true},
       {:nimble_options, "~> 0.4.0"},
       {:telemetry, "~> 0.4.3 or ~> 1.0"},
