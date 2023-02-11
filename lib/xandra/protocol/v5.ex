@@ -20,7 +20,7 @@ defmodule Xandra.Protocol.V5 do
 
   alias Xandra.Protocol, as: Proto
 
-  alias Xandra.Cluster.{StatusChange, TopologyChange}
+  alias Xandra.{StatusChange, TopologyChange}
 
   @unix_epoch_days 0x80000000
 

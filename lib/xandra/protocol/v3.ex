@@ -18,7 +18,7 @@ defmodule Xandra.Protocol.V3 do
     TypeParser
   }
 
-  alias Xandra.Cluster.{StatusChange, TopologyChange}
+  alias Xandra.{StatusChange, TopologyChange}
 
   alias Xandra.Protocol, as: Proto
 

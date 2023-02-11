@@ -1,4 +1,4 @@
-defmodule Xandra.Cluster.TopologyChange do
+defmodule Xandra.StatusChange do
   @moduledoc false
 
   defstruct [:effect, :address, :port]

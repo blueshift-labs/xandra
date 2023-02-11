@@ -1,291 +1,60 @@
 defmodule Xandra.Cluster do
-  @moduledoc """
-  Connection to a Cassandra cluster.
-
-  This module is a "proxy" connection with support for connecting to multiple
-  nodes in a Cassandra cluster and executing queries on such nodes based on a
-  given *strategy*.
-
-  ## Usage
-
-  This module manages connections to different nodes in a Cassandra cluster.
-  Each connection to a node is a pool of `Xandra` connections. When a `Xandra.Cluster`
-  connection is started, one `Xandra` pool of connections will be started for
-  each node specified in the `:nodes` option plus for autodiscovered nodes
-  if the `:autodiscovery` option is `true`.
-
-  The API provided by this module mirrors the API provided by the `Xandra`
-  module. Queries executed through this module will be "routed" to nodes
-  in the provided list of nodes based on a strategy. See the
-  ["Load balancing strategies" section](#module-load-balancing-strategies).
-
-  Regardless of the underlying pool, `Xandra.Cluster` will establish
-  one extra connection to each node in the specified list of `:nodes` (used for
-  internal purposes). See `start_link/1`.
-
-  Here is an example of how one could use `Xandra.Cluster` to connect to
-  multiple nodes:
-
-      Xandra.Cluster.start_link(
-        nodes: ["cassandra1.example.net", "cassandra2.example.net"],
-        pool_size: 10,
-      )
-
-  The code above will establish a pool of ten connections to each of the nodes
-  specified in `:nodes`, plus two extra connections (one per node) used for internal
-  purposes, for a total of twenty-two connections going out of the machine.
-
-  ## Child specification
-
-  `Xandra.Cluster` implements a `child_spec/1` function, so it can be used as a child
-  under a supervisor:
-
-      children = [
-        # ...,
-        {Xandra.Cluster, autodiscovery: true, nodes: ["cassandra-seed.example.net"]}
-      ]
-
-  ## Autodiscovery
-
-  When the `:autodiscovery` option is `true`, `Xandra.Cluster` discovers peer
-  nodes that live in the same cluster as the nodes specified in the `:nodes`
-  option. The nodes in `:nodes` act as **seed nodes**. When nodes in the cluster
-  are discovered, a `Xandra` pool of connections is started for each node that
-  is in the **same datacenter** as one of the nodes in `:nodes`. For now, there
-  is no limit on how many nodes in the same datacenter `Xandra.Cluster`
-  discovers and connects to.
-
-  ## Load-balancing strategies
-
-  These are the available load-balancing strategies:
-
-    * `:random` - it will choose one of the connected nodes at random and
-      execute the query on that node.
-
-    * `:priority` - it will choose a node to execute the query according
-      to the order nodes appear in `:nodes`. Not supported when `:autodiscovery`
-      is `true`.
-
-  ## Disconnections and reconnections
-
-  `Xandra.Cluster` also supports nodes disconnecting and reconnecting: if Xandra
-  detects one of the nodes in `:nodes` going down, it will not execute queries
-  against it anymore, but will start executing queries on it as soon as it
-  detects such node is back up.
-
-  If all specified nodes happen to be down when a query is executed, a
-  `Xandra.ConnectionError` with reason `{:cluster, :not_connected}` will be
-  returned.
-  """
-
-  use GenServer
-
-  alias Xandra.Cluster.{ControlConnection, StatusChange, TopologyChange}
-  alias Xandra.{Batch, ConnectionError, Prepared, RetryStrategy}
+  alias Xandra.{Prepared, Batch, RetryStrategy, ConnectionError}
+  alias Xandra.Clusters.{ConnectionRegistry, Cluster, Peer}
 
   require Logger
-  require Record
 
   @type cluster :: GenServer.server()
 
-  @default_port 9042
-
-  # State.
-  defstruct [
-    # Options for the underlying connection pools.
-    :pool_options,
-
-    # Load balancing strategy.
-    :load_balancing,
-
-    # A boolean that decides whether to discover new nodes in the cluster
-    # and add them to the pool.
-    :autodiscovery,
-
-    # When autodiscovering nodes, you cannot get their port from C*.
-    # Other drivers solve this by providing a static port that the driver
-    # uses to connect to any autodiscovered node.
-    :autodiscovered_nodes_port,
-
-    # A supervisor that supervises pools.
-    :pool_supervisor,
-
-    # A supervisor that supervises control connections.
-    # Children under this supervisor are identified by a "node_ref"
-    # (t:reference/0) generated when we start each control connection.
-    # We keep a reverse lookup of {peername, node_ref} pairs in the
-    # :node_refs key.
-    :control_conn_supervisor,
-
-    # A map of peername to pool PID pairs.
-    pools: %{},
-
-    # A reverse lookup list of peername => node_ref. This is used
-    # to retrieve the node_ref of a control connection in order to
-    # operate that control connection under the control connection
-    # supervisor. The reason this is a list is that we want to keep
-    # it ordered in order to support the :priority strategy,
-    # which runs a query through the same order of nodes every time.
-    node_refs: [],
-
-    # Modules to swap processes when testing.
-    xandra_mod: nil,
-    control_conn_mod: nil
-  ]
-
   start_link_opts_schema = [
+    cluster_name: [
+      type: :string,
+      default: "default",
+      doc: false
+    ],
+    address: [
+      type: :string,
+      required: true,
+      doc: false
+    ],
+    port: [
+      type: :non_neg_integer,
+      default: 9042,
+      doc: false
+    ],
     load_balancing: [
-      type: {:in, [:priority, :random]},
-      default: :random,
-      doc: """
-      Load balancing "strategy". Either `:random` or `:priority`. See the "Load balancing
-      strategies" section in the module documentation. If `:autodiscovery` is `true`,
-      the only supported strategy is `:random`.
-      """
+      type: {:list, {:in, [:random, :rack_aware, :token_aware]}},
+      default: [:random],
+      doc: false
     ],
-    nodes: [
-      type: {:list, {:custom, Xandra.OptionsValidators, :validate_node, []}},
-      default: ["127.0.0.1"],
-      doc: """
-      A list of nodes to use as seed nodes when setting up the cluster. Each node in this list
-      must be a hostname (`"cassandra.example.net"`), IPv4 (`"192.168.0.100"`),
-      or IPv6 (`"16:64:c8:0:2c:58:5c:c7"`) address. An optional port can be specified by
-      including `:<port>` after the address, such as `"cassandra.example.net:9876"`.
-      The behavior of this option depends on the `:autodiscovery` option. See the "Autodiscovery"
-      section. If the `:autodiscovery` option is `false`, the cluster only connects
-      to the nodes in `:nodes` and sets up one additional control connection
-      for each one of these nodes.
-      """
-    ],
-    autodiscovery: [
-      type: :boolean,
-      default: true,
-      doc: """
-      Whether to *autodiscover* peer nodes in the cluster. See the "Autodiscovery" section
-      in the module documentation.
-      """
-    ],
-    autodiscovered_nodes_port: [
-      type: {:in, 0..65535},
-      default: @default_port,
-      doc: """
-      The port to use when connecting to autodiscovered nodes. Cassandra does not advertise
-      the port of nodes when discovering them, so you'll need to specify one explicitly.
-      This might get fixed in future Cassandra versions.
-      """
+    keyspace: [
+      type: :string,
+      doc: false
     ],
     name: [
       type: :any,
-      doc: """
-      The name to register this cluster under. Follows the name registration rules of `GenServer`.
-      """
-    ],
-
-    # Internal for testing, not exposed.
-    xandra_module: [type: :atom, default: Xandra, doc: false],
-    control_connection_module: [type: :atom, default: ControlConnection, doc: false]
+      doc: false
+    ]
   ]
 
   @start_link_opts_schema NimbleOptions.new!(start_link_opts_schema)
   @start_link_opts_schema_keys Keyword.keys(start_link_opts_schema)
 
-  @doc """
-  Starts connections to a cluster.
-
-  ## Options
-
-  This function accepts all options accepted by `Xandra.start_link/1` and
-  and forwards them to each underlying connection or pool of connections. The following
-  options are specific to this function:
-
-  #{NimbleOptions.docs(@start_link_opts_schema)}
-
-  > #### Control connections {: .neutral}
-  >
-  > A `Xandra.Cluster` starts **one additional "control connection"** for each node.
-  >
-  > If the `:autodiscovery` option is `false`, then this means one additional connection
-  > to each node listed in the `:nodes` option. If `:autodiscovery` is `true`, then
-  > this means an additional connection to each node in `:nodes` plus one for each
-  > "autodiscovered" node.
-
-  ## Examples
-
-  Starting a cluster connection to two specific nodes in the cluster:
-
-      {:ok, cluster} =
-        Xandra.Cluster.start_link(
-          nodes: ["cassandra1.example.net", "cassandra2.example.net"],
-          autodiscovery: false
-        )
-
-  Starting a pool of five connections to nodes in the same cluster as the given
-  *seed node*:
-
-      {:ok, cluster} =
-        Xandra.Cluster.start_link(
-          autodiscovery: true,
-          nodes: ["cassandra-seed.example.net"]
-          pool_size: 5
-        )
-
-  Passing options down to each connection:
-
-      {:ok, cluster} =
-        Xandra.Cluster.start_link(
-          nodes: ["cassandra.example.net"],
-          after_connect: &Xandra.execute!(&1, "USE my_keyspace")
-        )
-
-  """
-  @spec start_link([option]) :: GenServer.on_start()
-        when option: Xandra.start_option() | {atom(), term()}
-  def start_link(options) when is_list(options) do
-    {cluster_opts, pool_opts} = Keyword.split(options, @start_link_opts_schema_keys)
+  def start_link(options) do
+    {cluster_opts, _} = Keyword.split(options, @start_link_opts_schema_keys)
     cluster_opts = NimbleOptions.validate!(cluster_opts, @start_link_opts_schema)
+    options = Keyword.merge(options, cluster_opts)
 
-    # TODO: Replace with Keyword.pop!/2 once we depend on Elixir 1.10+.
-    {nodes, cluster_opts} = Keyword.pop(cluster_opts, :nodes)
+    {name, options} = Keyword.split(options, [:name])
+    Connection.start_link(Cluster, options, name)
+  end
 
-    if cluster_opts[:autodiscovery] && cluster_opts[:load_balancing] == :priority do
-      raise ArgumentError,
-            "the :priority load balancing strategy is only supported when :autodiscovery is false"
-    end
-
-    state = %__MODULE__{
-      pool_options: pool_opts,
-      load_balancing: Keyword.fetch!(cluster_opts, :load_balancing),
-      autodiscovery: Keyword.fetch!(cluster_opts, :autodiscovery),
-      autodiscovered_nodes_port: Keyword.fetch!(cluster_opts, :autodiscovered_nodes_port),
-      xandra_mod: Keyword.fetch!(cluster_opts, :xandra_module),
-      control_conn_mod: Keyword.fetch!(cluster_opts, :control_connection_module)
+  def child_spec(options) do
+    %{
+      id: __MODULE__,
+      type: :worker,
+      start: {__MODULE__, :start_link, [options]}
     }
-
-    genserver_opts =
-      case Keyword.fetch(cluster_opts, :name) do
-        {:ok, name} -> [name: name]
-        :error -> []
-      end
-
-    GenServer.start_link(__MODULE__, {state, nodes}, genserver_opts)
-  end
-
-  # Used internally by Xandra.Cluster.ControlConnection.
-  @doc false
-  def activate(cluster, node_ref, {_ip, _port} = peername) do
-    GenServer.cast(cluster, {:activate, node_ref, peername})
-  end
-
-  # Used internally by Xandra.Cluster.ControlConnection.
-  @doc false
-  def update(cluster, status_change) do
-    GenServer.cast(cluster, {:update, status_change})
-  end
-
-  # Used internally by Xandra.Cluster.ControlConnection.
-  @doc false
-  def discovered_peers(cluster, peers, source_control_conn) do
-    GenServer.cast(cluster, {:discovered_peers, peers, source_control_conn})
   end
 
   @doc """
@@ -300,13 +69,13 @@ defmodule Xandra.Cluster do
   """
   @spec stream_pages!(
           cluster,
-          Xandra.statement() | Xandra.Prepared.t(),
+          Xandra.statement() | Prepared.t(),
           Xandra.values(),
           keyword
         ) ::
           Enumerable.t()
   def stream_pages!(cluster, query, params, options \\ []) do
-    with_conn(cluster, &Xandra.stream_pages!(&1, query, params, options))
+    with_conn(cluster, options, &Xandra.stream_pages!(&1, query, params, options))
   end
 
   @doc """
@@ -339,9 +108,9 @@ defmodule Xandra.Cluster do
   again instead.
   """
   @spec prepare(cluster, Xandra.statement(), keyword) ::
-          {:ok, Xandra.Prepared.t()} | {:error, Xandra.error()}
+          {:ok, Prepared.t()} | {:error, Xandra.error()}
   def prepare(cluster, statement, options \\ []) when is_binary(statement) do
-    with_conn(cluster, &Xandra.prepare(&1, statement, options))
+    with_conn(cluster, options, &Xandra.prepare(&1, statement, options))
   end
 
   @doc """
@@ -350,7 +119,7 @@ defmodule Xandra.Cluster do
   If the function is successful, the prepared query is returned directly
   instead of in an `{:ok, prepared}` tuple like in `prepare/3`.
   """
-  @spec prepare!(cluster, Xandra.statement(), keyword) :: Xandra.Prepared.t() | no_return
+  @spec prepare!(cluster, Xandra.statement(), keyword) :: Prepared.t() | no_return
   def prepare!(cluster, statement, options \\ []) do
     case prepare(cluster, statement, options) do
       {:ok, result} -> result
@@ -361,7 +130,7 @@ defmodule Xandra.Cluster do
   @doc """
   Same as `execute/4` but with optional arguments.
   """
-  @spec execute(cluster, Xandra.statement() | Xandra.Prepared.t(), Xandra.values()) ::
+  @spec execute(cluster, Xandra.statement() | Prepared.t(), Xandra.values()) ::
           {:ok, Xandra.result()} | {:error, Xandra.error()}
   @spec execute(cluster, Xandra.Batch.t(), keyword) ::
           {:ok, Xandra.Void.t()} | {:error, Xandra.error()}
@@ -380,25 +149,9 @@ defmodule Xandra.Cluster do
   end
 
   @doc """
-  Executes a query on a node in the cluster.
-
-  This function executes a query on a node in the cluster. The node is chosen based
-  on the load balancing strategy given in `start_link/1`.
-
-  Supports the same options as `Xandra.execute/4`. In particular, the `:retry_strategy`
-  option is cluster-aware, meaning that queries are retried on possibly different nodes
-  in the cluster.
-  """
-  @spec execute(cluster, Xandra.statement() | Xandra.Prepared.t(), Xandra.values(), keyword) ::
-          {:ok, Xandra.result()} | {:error, Xandra.error()}
-  def execute(cluster, query, params, options) do
-    with_conn_and_retrying(cluster, options, &Xandra.execute(&1, query, params, options))
-  end
-
-  @doc """
   Same as `execute/3` but returns the result directly or raises in case of errors.
   """
-  @spec execute!(cluster, Xandra.statement() | Xandra.Prepared.t(), Xandra.values()) ::
+  @spec execute!(cluster, Xandra.statement() | Prepared.t(), Xandra.values()) ::
           Xandra.result() | no_return
   @spec execute!(cluster, Xandra.Batch.t(), keyword) ::
           Xandra.Void.t() | no_return
@@ -410,9 +163,25 @@ defmodule Xandra.Cluster do
   end
 
   @doc """
+  Executes a query on a node in the cluster.
+
+  This function executes a query on a node in the cluster. The node is chosen based
+  on the load balancing strategy given in `start_link/1`.
+
+  Supports the same options as `Xandra.execute/4`. In particular, the `:retry_strategy`
+  option is cluster-aware, meaning that queries are retried on possibly different nodes
+  in the cluster.
+  """
+  @spec execute(cluster, Xandra.statement() | Prepared.t(), Xandra.values(), keyword) ::
+          {:ok, Xandra.result()} | {:error, Xandra.error()}
+  def execute(cluster, query, params, options) do
+    with_conn_and_retrying(cluster, options, &Xandra.execute(&1, query, params, options))
+  end
+
+  @doc """
   Same as `execute/4` but returns the result directly or raises in case of errors.
   """
-  @spec execute(cluster, Xandra.statement() | Xandra.Prepared.t(), Xandra.values(), keyword) ::
+  @spec execute!(cluster, Xandra.statement() | Prepared.t(), Xandra.values(), keyword) ::
           Xandra.result() | no_return
   def execute!(cluster, query, params, options) do
     case execute(cluster, query, params, options) do
@@ -443,287 +212,103 @@ defmodule Xandra.Cluster do
   """
   @spec run(cluster, keyword, (Xandra.conn() -> result)) :: result when result: var
   def run(cluster, options \\ [], fun) do
-    with_conn(cluster, &Xandra.run(&1, options, fun))
+    with_conn_and_retrying(cluster, options, &Xandra.run(&1, options, fun))
   end
 
   defp with_conn_and_retrying(cluster, options, fun) do
-    RetryStrategy.run_with_retrying(options, fn -> with_conn(cluster, fun) end)
+    RetryStrategy.run_with_retrying(options, fn -> with_conn(cluster, options, fun) end)
   end
 
-  defp with_conn(cluster, fun) do
-    case GenServer.call(cluster, :checkout) do
-      {:ok, pool} ->
-        fun.(pool)
+  defp with_conn(cluster, options, fun) do
+    cluster_name = Keyword.fetch!(options, :cluster_name)
+    load_balancing = Keyword.fetch!(options, :load_balancing)
 
-      {:error, :empty} ->
+    pools =
+      Registry.select(ConnectionRegistry, [
+        {{{cluster_name, :"$1"}, :"$2", {:"$3", :"$4"}}, [],
+         [{{cluster_name, :"$1", :"$2", :"$3", :"$4"}}]}
+      ])
+
+    pool = select_pool(load_balancing, pools, options)
+
+    case pool do
+      nil ->
         action = "checkout from cluster #{inspect(cluster)}"
         {:error, ConnectionError.new(action, {:cluster, :not_connected})}
+
+      _ ->
+        fun.(pool)
     end
   end
 
-  ## Callbacks and implementation stuff
+  defp select_pool(_load_balancing, [], _options), do: nil
 
-  Record.defrecordp(:node_ref, ref: nil, peername: nil)
-
-  defguardp is_inet_port(port) when port in 0..65355
-  defguardp is_ip(ip) when is_tuple(ip) and tuple_size(ip) in [4, 8]
-
-  defguardp is_peername(peername)
-            when is_tuple(peername) and tuple_size(peername) == 2 and is_ip(elem(peername, 0)) and
-                   is_inet_port(elem(peername, 1))
-
-  @impl true
-  def init({%__MODULE__{} = state, nodes}) do
-    # Start supervisors for the pools and the control connections.
-    {:ok, control_conn_sup} = Supervisor.start_link([], strategy: :one_for_one)
-    {:ok, pool_sup} = Supervisor.start_link([], strategy: :one_for_one)
-
-    state = %__MODULE__{
-      state
-      | control_conn_supervisor: control_conn_sup,
-        pool_supervisor: pool_sup
-    }
-
-    state = start_control_connections(state, nodes)
-
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_call(:checkout, _from, %__MODULE__{} = state) do
-    %__MODULE__{
-      node_refs: node_refs,
-      load_balancing: load_balancing,
-      pools: pools
-    } = state
-
-    if Enum.empty?(pools) do
-      {:reply, {:error, :empty}, state}
-    else
-      pool = select_pool(load_balancing, pools, node_refs)
-      {:reply, {:ok, pool}, state}
-    end
-  end
-
-  @impl true
-  def handle_cast(message, state)
-
-  # A control connection came online for the first time.
-  def handle_cast({:activate, node_ref, peername}, %__MODULE__{} = state)
-      when is_reference(node_ref) and is_peername(peername) do
-    _ = Logger.debug("Control connection for #{peername_to_string(peername)} is up")
-
-    # Check whether we already had an active control connection to this peer.
-    # If we did, shut down the control connection that just reported active.
-    # Otherwise, store this control connection and start the pool for this
-    # peer.
-    if List.keymember?(state.node_refs, peername, node_ref(:peername)) do
-      Logger.debug(
-        "Control connection for #{peername_to_string(peername)} was already present, shutting this one down"
-      )
-
-      state = update_in(state.node_refs, &List.keydelete(&1, node_ref, node_ref(:ref)))
-      _ = Supervisor.terminate_child(state.control_conn_supervisor, node_ref)
-      _ = Supervisor.delete_child(state.control_conn_supervisor, node_ref)
-      {:noreply, state}
-    else
-      # Store the peername alongside the original node_ref that we kept.
-      new_node_ref = node_ref(ref: node_ref, peername: peername)
-
-      state =
-        update_in(state.node_refs, &List.keystore(&1, node_ref, node_ref(:ref), new_node_ref))
-
-      state = start_pool(state, node_ref, peername)
-      {:noreply, state}
-    end
-  end
-
-  # A control connection is reporting peers that it discovered.
-  # "peers" is a list of IP tuples.
-  def handle_cast({:discovered_peers, peers, source_control_conn}, %__MODULE__{} = state) do
-    Logger.debug(fn ->
-      "Discovered peers from #{inspect(source_control_conn)}: " <>
-        inspect(Enum.map(peers, &:inet.ntoa/1))
-    end)
-
-    {already_connected_peernames, new_peernames} =
-      peers
-      |> Stream.map(&{&1, state.autodiscovered_nodes_port})
-      |> Enum.split_with(&List.keymember?(state.node_refs, &1, node_ref(:peername)))
-
-    Enum.each(already_connected_peernames, fn peername ->
-      Logger.debug("Connection to node #{peername_to_string(peername)} already established")
-    end)
-
-    state = start_control_connections(state, new_peernames)
-
-    {:noreply, state}
-  end
-
-  def handle_cast({:update, {:control_connection_established, address}}, %__MODULE__{} = state) do
-    state = restart_pool(state, address)
-    {:noreply, state}
-  end
-
-  def handle_cast({:update, %StatusChange{} = status_change}, %__MODULE__{} = state) do
-    state = handle_status_change(state, status_change)
-    {:noreply, state}
-  end
-
-  def handle_cast({:update, %TopologyChange{} = topology_change}, %__MODULE__{} = state) do
-    state = handle_topology_change(state, topology_change)
-    {:noreply, state}
-  end
-
-  ## Helpers
-
-  defp control_conn_child_spec({address, port}, %__MODULE__{} = state) do
-    %__MODULE__{
-      autodiscovery: autodiscovery?,
-      pool_options: pool_options,
-      control_conn_mod: control_conn_mod
-    } = state
-
-    opts = [
-      cluster: self(),
-      node_ref: make_ref(),
-      address: address,
-      port: port,
-      connection_options: pool_options,
-      autodiscovery: autodiscovery?
-    ]
-
-    Supervisor.child_spec({control_conn_mod, opts}, id: opts[:node_ref], restart: :transient)
-  end
-
-  defp start_control_connections(%__MODULE__{} = state, peernames) do
-    Enum.reduce(peernames, state, fn peername, state ->
-      %{id: node_ref} = control_conn_spec = control_conn_child_spec(peername, state)
-      {:ok, _pid} = Supervisor.start_child(state.control_conn_supervisor, control_conn_spec)
-
-      # Append this node_ref (and later on its peername) to the ordered
-      # list of node_refs.
-      new_node_ref = node_ref(ref: node_ref)
-      update_in(state.node_refs, &List.keystore(&1, node_ref, node_ref(:ref), new_node_ref))
-    end)
-  end
-
-  defp start_pool(%__MODULE__{} = state, _node_ref, {ip, port} = peername)
-       when is_peername(peername) do
-    options = Keyword.merge(state.pool_options, nodes: ["#{:inet.ntoa(ip)}:#{port}"])
-
-    pool_spec =
-      Supervisor.child_spec({state.xandra_mod, options}, id: peername, restart: :transient)
-
-    case Supervisor.start_child(state.pool_supervisor, pool_spec) do
-      {:ok, pool} ->
-        _ = Logger.debug("Started connection pool to #{peername_to_string(peername)}")
-        put_in(state.pools[peername], pool)
-      {:error, {:already_started, _pool}} ->
-        state
-    end
-  end
-
-  defp restart_pool(state, address) do
-    Logger.debug("Restarting pool: #{inspect(address)}")
-    %__MODULE__{pool_supervisor: pool_supervisor, pools: pools} = state
-
-    case Supervisor.restart_child(pool_supervisor, address) do
-      {:error, reason} when reason in [:not_found, :running, :restarting] ->
-        state
-
-      {:ok, pool} ->
-        %__MODULE__{state | pools: Map.put(pools, address, pool)}
-    end
-  end
-
-  defp handle_status_change(state, %StatusChange{effect: "UP", address: address}) do
-    restart_pool(state, {address, state.autodiscovered_nodes_port})
-  end
-
-  defp handle_status_change(state, %StatusChange{effect: "DOWN", address: address}) do
-    Logger.debug("StatusChange DOWN for node: #{inspect(address)}")
-    peername = {address, state.autodiscovered_nodes_port}
-    %__MODULE__{pool_supervisor: pool_supervisor, pools: pools} = state
-    _ = Supervisor.terminate_child(pool_supervisor, peername)
-    %__MODULE__{state | pools: Map.delete(pools, peername)}
-  end
-
-  # We don't care about changes in the topology if we're not autodiscovering
-  # nodes.
-  defp handle_topology_change(%__MODULE__{autodiscovery: false} = state, %TopologyChange{}) do
-    state
-  end
-
-  defp handle_topology_change(state, %TopologyChange{effect: "NEW_NODE", address: address}) do
-    peername = {address, state.autodiscovered_nodes_port}
-
-    # Ignore this peer if we already had a control connection (and
-    # thus a pool) for it.
-    if List.keymember?(state.node_refs, peername, node_ref(:peername)) do
-      Logger.debug("Connection to node #{peername_to_string(peername)} already established")
-      state
-    else
-      control_conn_spec = control_conn_child_spec(peername, state)
-      node_ref = control_conn_spec.id
-
-      # Append this node_ref (and later on its peername) to the ordered
-      # list of node_refs.
-      state =
-        update_in(
-          state.node_refs,
-          &List.keystore(&1, node_ref, node_ref(:ref), node_ref(ref: node_ref))
-        )
-
-      {:ok, _pid} = Supervisor.start_child(state.control_conn_supervisor, control_conn_spec)
-
-      state
-    end
-  end
-
-  defp handle_topology_change(state, %TopologyChange{effect: "REMOVED_NODE", address: address}) do
-    %__MODULE__{
-      pool_supervisor: pool_supervisor,
-      pools: pools,
-      control_conn_supervisor: control_conn_supervisor
-    } = state
-
-    peername = {address, state.autodiscovered_nodes_port}
-
-    # Terminate the pool and remove it from the supervisor.
-    _ = Supervisor.terminate_child(pool_supervisor, peername)
-    _ = Supervisor.delete_child(pool_supervisor, peername)
-
-    # Terminate the control connection and remove it from the supervisor.
-
-    {ref, state} =
-      get_and_update_in(state.node_refs, fn list ->
-        # TODO: Replace with List.keyfind!/3 when we depend on Elixir 1.13+.
-        node_ref(ref: ref) = List.keyfind(list, peername, node_ref(:peername))
-        {ref, List.keydelete(list, peername, node_ref(:peername))}
-      end)
-
-    _ = Supervisor.terminate_child(control_conn_supervisor, ref)
-    _ = Supervisor.delete_child(control_conn_supervisor, ref)
-
-    %__MODULE__{state | pools: Map.delete(pools, peername)}
-  end
-
-  defp handle_topology_change(state, %TopologyChange{effect: "MOVED_NODE"} = event) do
-    _ = Logger.warn("Ignored TOPOLOGY_CHANGE event: #{inspect(event)}")
-    state
-  end
-
-  defp select_pool(:random, pools, _node_refs) do
-    {_address, pool} = Enum.random(pools)
+  defp select_pool([], pools, _options) do
+    {_, _, pool, _, _} = Enum.random(pools)
     pool
   end
 
-  defp select_pool(:priority, pools, node_refs) do
-    Enum.find_value(node_refs, fn node_ref(peername: peername) -> Map.get(pools, peername) end)
+  defp select_pool([:random | _], pools, options) do
+    select_pool([], pools, options)
   end
 
-  defp peername_to_string({ip, port} = peername) when is_peername(peername) do
-    "#{:inet.ntoa(ip)}:#{port}"
+  defp select_pool([:rack_aware | _] = load_balancing, pools, options) do
+    {rack, options} = Keyword.pop(options, :rack)
+    select_pool(load_balancing, pools, rack, options)
+  end
+
+  defp select_pool([:token_aware | _] = load_balancing, pools, options) do
+    {token, options} = Keyword.pop(options, :token)
+    select_pool(load_balancing, pools, token, options)
+  end
+
+  defp select_pool([_ | load_balancing], pools, options) do
+    select_pool(load_balancing, pools, options)
+  end
+
+  defp select_pool([:rack_aware | load_balancing], pools, nil, options) do
+    select_pool(load_balancing, pools, options)
+  end
+
+  defp select_pool([:rack_aware | load_balancing], pools, rack, options) do
+    rack_pools =
+      Enum.filter(pools, fn {cluster_name, host_id, _pid, _rpc_address, _port} ->
+        Registry.lookup(ControlRegistry, {cluster_name, host_id})
+        |> case do
+          [{_, %Peer{rack: ^rack}}] -> true
+          _ -> false
+        end
+      end)
+
+    case rack_pools do
+      [] ->
+        select_pool(load_balancing, pools, options)
+
+      _ ->
+        select_pool(load_balancing, rack_pools, options)
+    end
+  end
+
+  defp select_pool([:token_aware | load_balancing], pools, nil, options) do
+    select_pool(load_balancing, pools, options)
+  end
+
+  defp select_pool([:token_aware | load_balancing], pools, _token, options) do
+    token_pools =
+      Enum.filter(pools, fn {cluster_name, host_id, _pid, _rpc_address, _port} ->
+        Registry.lookup(ControlRegistry, {cluster_name, host_id})
+        |> case do
+          [{_, %Peer{}}] -> true
+          _ -> false
+        end
+      end)
+
+    case token_pools do
+      [] ->
+        select_pool(load_balancing, pools, options)
+
+      _ ->
+        select_pool(load_balancing, token_pools, options)
+    end
   end
 end
