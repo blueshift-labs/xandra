@@ -178,7 +178,7 @@ defmodule Xandra.Clusters.Cluster do
              rpc_address,
              port,
              data_center,
-             Keyword.put(options, :discover_peers?, true)
+             options
            ) do
       Logger.debug("Successfully connected to cluster [#{cluster_name}] at [#{address}:#{port}]")
 

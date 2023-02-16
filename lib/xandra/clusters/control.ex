@@ -178,8 +178,7 @@ defmodule Xandra.Clusters.Control do
           cluster_name: cluster_name,
           host_id: host_id,
           rpc_address: rpc_address,
-          port: port,
-          options: options
+          port: port
         } = state
       ) do
     Logger.debug(
@@ -188,11 +187,7 @@ defmodule Xandra.Clusters.Control do
 
     case discover_system_local(state) do
       :ok ->
-        discover_peers? = Keyword.get(options, :discover_peers?, false)
-
-        if discover_peers? do
-          Process.send_after(self(), :discover_peers, 0)
-        end
+        Process.send_after(self(), :discover_peers, 0)
 
         {:noreply, state, @discover_interval}
 
@@ -236,8 +231,6 @@ defmodule Xandra.Clusters.Control do
       Logger.debug(
         "Discovered peers with cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}], [#{inspect(peers)}]"
       )
-
-      options = Keyword.delete(options, :discover_peers?)
 
       Enum.each(peers, fn %{host_id: host_id, rpc_address: rpc_address} ->
         startup_control(
