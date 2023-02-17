@@ -1,5 +1,5 @@
 defmodule Xandra.Cluster do
-  alias Xandra.{Prepared, Batch, ConnectionError}
+  alias Xandra.{Prepared, Batch, RetryStrategy, ConnectionError}
   alias Xandra.Clusters.{ConnectionRegistry, Cluster, Peer}
 
   require Logger
@@ -83,7 +83,7 @@ defmodule Xandra.Cluster do
       |> Keyword.merge(options)
       |> Keyword.put(:cluster_name, cluster_name)
 
-    with_conn(cluster, options, &Xandra.stream_pages!(&1, query, params, options))
+    with_conn_and_retrying(cluster, options, &Xandra.stream_pages!(&1, query, params, options))
   end
 
   @doc """
@@ -169,7 +169,7 @@ defmodule Xandra.Cluster do
       |> Keyword.merge(options)
       |> Keyword.put(:cluster_name, cluster_name)
 
-    with_conn(cluster, options, &Xandra.execute(&1, batch, options))
+    with_conn_and_retrying(cluster, options, &Xandra.execute(&1, batch, options))
   end
 
   @doc """
@@ -207,7 +207,7 @@ defmodule Xandra.Cluster do
       |> Keyword.merge(options)
       |> Keyword.put(:cluster_name, cluster_name)
 
-    with_conn(cluster, options, &Xandra.execute(&1, query, params, options))
+    with_conn_and_retrying(cluster, options, &Xandra.execute(&1, query, params, options))
   end
 
   @doc """
@@ -253,6 +253,10 @@ defmodule Xandra.Cluster do
       |> Keyword.put(:cluster_name, cluster_name)
 
     with_conn(cluster, options, &Xandra.run(&1, options, fun))
+  end
+
+  defp with_conn_and_retrying(cluster, options, fun) do
+    RetryStrategy.run_with_retrying(options, fn -> with_conn(cluster, options, fun) end)
   end
 
   defp with_conn(cluster, options, fun) do
