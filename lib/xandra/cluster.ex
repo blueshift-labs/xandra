@@ -1,5 +1,5 @@
 defmodule Xandra.Cluster do
-  alias Xandra.{Prepared, Batch, RetryStrategy, ConnectionError}
+  alias Xandra.{Prepared, Batch, ConnectionError}
   alias Xandra.Clusters.{ConnectionRegistry, Cluster, Peer}
 
   require Logger
@@ -75,6 +75,14 @@ defmodule Xandra.Cluster do
         ) ::
           Enumerable.t()
   def stream_pages!(cluster, query, params, options \\ []) do
+    %{cluster_name: cluster_name, options: cluster_options} =
+      Xandra.Clusters.Cluster.info(cluster)
+
+    options =
+      cluster_options
+      |> Keyword.merge(options)
+      |> Keyword.put(:cluster_name, cluster_name)
+
     with_conn(cluster, options, &Xandra.stream_pages!(&1, query, params, options))
   end
 
@@ -110,6 +118,14 @@ defmodule Xandra.Cluster do
   @spec prepare(cluster, Xandra.statement(), keyword) ::
           {:ok, Prepared.t()} | {:error, Xandra.error()}
   def prepare(cluster, statement, options \\ []) when is_binary(statement) do
+    %{cluster_name: cluster_name, options: cluster_options} =
+      Xandra.Clusters.Cluster.info(cluster)
+
+    options =
+      cluster_options
+      |> Keyword.merge(options)
+      |> Keyword.put(:cluster_name, cluster_name)
+
     with_conn(cluster, options, &Xandra.prepare(&1, statement, options))
   end
 
@@ -145,7 +161,15 @@ defmodule Xandra.Cluster do
   end
 
   def execute(cluster, %Batch{} = batch, options) when is_list(options) do
-    with_conn_and_retrying(cluster, options, &Xandra.execute(&1, batch, options))
+    %{cluster_name: cluster_name, options: cluster_options} =
+      Xandra.Clusters.Cluster.info(cluster)
+
+    options =
+      cluster_options
+      |> Keyword.merge(options)
+      |> Keyword.put(:cluster_name, cluster_name)
+
+    with_conn(cluster, options, &Xandra.execute(&1, batch, options))
   end
 
   @doc """
@@ -175,7 +199,15 @@ defmodule Xandra.Cluster do
   @spec execute(cluster, Xandra.statement() | Prepared.t(), Xandra.values(), keyword) ::
           {:ok, Xandra.result()} | {:error, Xandra.error()}
   def execute(cluster, query, params, options) do
-    with_conn_and_retrying(cluster, options, &Xandra.execute(&1, query, params, options))
+    %{cluster_name: cluster_name, options: cluster_options} =
+      Xandra.Clusters.Cluster.info(cluster)
+
+    options =
+      cluster_options
+      |> Keyword.merge(options)
+      |> Keyword.put(:cluster_name, cluster_name)
+
+    with_conn(cluster, options, &Xandra.execute(&1, query, params, options))
   end
 
   @doc """
@@ -212,11 +244,15 @@ defmodule Xandra.Cluster do
   """
   @spec run(cluster, keyword, (Xandra.conn() -> result)) :: result when result: var
   def run(cluster, options \\ [], fun) do
-    with_conn_and_retrying(cluster, options, &Xandra.run(&1, options, fun))
-  end
+    %{cluster_name: cluster_name, options: cluster_options} =
+      Xandra.Clusters.Cluster.info(cluster)
 
-  defp with_conn_and_retrying(cluster, options, fun) do
-    RetryStrategy.run_with_retrying(options, fn -> with_conn(cluster, options, fun) end)
+    options =
+      cluster_options
+      |> Keyword.merge(options)
+      |> Keyword.put(:cluster_name, cluster_name)
+
+    with_conn(cluster, options, &Xandra.run(&1, options, fun))
   end
 
   defp with_conn(cluster, options, fun) do
