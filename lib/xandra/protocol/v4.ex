@@ -129,6 +129,19 @@ defmodule Xandra.Protocol.V4 do
     %Frame{frame | body: body}
   end
 
+  def encode_partition_key({type, value}) do
+    encode_value(TypeParser.parse(type), value)
+  end
+
+  def encode_partition_keys([]), do: <<>>
+
+  def encode_partition_keys([{type, value} | partition_keys]) do
+    encoded = encode_value(TypeParser.parse(type), value)
+
+    <<byte_size(encoded)::16, encoded::binary, 0::8,
+      encode_partition_keys(partition_keys)::binary>>
+  end
+
   defp encode_custom_payload(nil) do
     []
   end

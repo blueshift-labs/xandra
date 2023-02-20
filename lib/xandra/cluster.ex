@@ -1,6 +1,7 @@
 defmodule Xandra.Cluster do
-  alias Xandra.{Prepared, Batch, RetryStrategy, ConnectionError}
-  alias Xandra.Clusters.{ConnectionRegistry, Cluster, Peer}
+  alias Xandra.{Prepared, Batch, RetryStrategy, TableMetadata, ConnectionError}
+  alias Xandra.Clusters.{ControlRegistry, ConnectionRegistry, Cluster, Peer}
+  alias Xandra.Clusters.Application, as: Clusters
 
   require Logger
 
@@ -40,6 +41,8 @@ defmodule Xandra.Cluster do
   @start_link_opts_schema NimbleOptions.new!(start_link_opts_schema)
   @start_link_opts_schema_keys Keyword.keys(start_link_opts_schema)
 
+  @murmur3_partitioner "org.apache.cassandra.dht.Murmur3Partitioner"
+
   def start_link(options) do
     {cluster_opts, _} = Keyword.split(options, @start_link_opts_schema_keys)
     cluster_opts = NimbleOptions.validate!(cluster_opts, @start_link_opts_schema)
@@ -75,13 +78,25 @@ defmodule Xandra.Cluster do
         ) ::
           Enumerable.t()
   def stream_pages!(cluster, query, params, options \\ []) do
-    %{cluster_name: cluster_name, options: cluster_options} =
-      Xandra.Clusters.Cluster.info(cluster)
+    %{
+      cluster_name: cluster_name,
+      keyspace: keyspace,
+      load_balancing: load_balancing,
+      protocol_module: protocol_module,
+      partitioner: partitioner,
+      options: cluster_options
+    } = Xandra.Clusters.Cluster.info(cluster)
 
     options =
       cluster_options
+      |> Keyword.merge(
+        cluster_name: cluster_name,
+        keyspace: keyspace,
+        load_balancing: load_balancing,
+        protocol_module: protocol_module,
+        partitioner: partitioner
+      )
       |> Keyword.merge(options)
-      |> Keyword.put(:cluster_name, cluster_name)
 
     with_conn_and_retrying(cluster, options, &Xandra.stream_pages!(&1, query, params, options))
   end
@@ -118,13 +133,25 @@ defmodule Xandra.Cluster do
   @spec prepare(cluster, Xandra.statement(), keyword) ::
           {:ok, Prepared.t()} | {:error, Xandra.error()}
   def prepare(cluster, statement, options \\ []) when is_binary(statement) do
-    %{cluster_name: cluster_name, options: cluster_options} =
-      Xandra.Clusters.Cluster.info(cluster)
+    %{
+      cluster_name: cluster_name,
+      keyspace: keyspace,
+      load_balancing: load_balancing,
+      protocol_module: protocol_module,
+      partitioner: partitioner,
+      options: cluster_options
+    } = Xandra.Clusters.Cluster.info(cluster)
 
     options =
       cluster_options
+      |> Keyword.merge(
+        cluster_name: cluster_name,
+        keyspace: keyspace,
+        load_balancing: load_balancing,
+        protocol_module: protocol_module,
+        partitioner: partitioner
+      )
       |> Keyword.merge(options)
-      |> Keyword.put(:cluster_name, cluster_name)
 
     with_conn(cluster, options, &Xandra.prepare(&1, statement, options))
   end
@@ -161,13 +188,25 @@ defmodule Xandra.Cluster do
   end
 
   def execute(cluster, %Batch{} = batch, options) when is_list(options) do
-    %{cluster_name: cluster_name, options: cluster_options} =
-      Xandra.Clusters.Cluster.info(cluster)
+    %{
+      cluster_name: cluster_name,
+      keyspace: keyspace,
+      load_balancing: load_balancing,
+      protocol_module: protocol_module,
+      partitioner: partitioner,
+      options: cluster_options
+    } = Xandra.Clusters.Cluster.info(cluster)
 
     options =
       cluster_options
+      |> Keyword.merge(
+        cluster_name: cluster_name,
+        keyspace: keyspace,
+        load_balancing: load_balancing,
+        protocol_module: protocol_module,
+        partitioner: partitioner
+      )
       |> Keyword.merge(options)
-      |> Keyword.put(:cluster_name, cluster_name)
 
     with_conn_and_retrying(cluster, options, &Xandra.execute(&1, batch, options))
   end
@@ -199,13 +238,25 @@ defmodule Xandra.Cluster do
   @spec execute(cluster, Xandra.statement() | Prepared.t(), Xandra.values(), keyword) ::
           {:ok, Xandra.result()} | {:error, Xandra.error()}
   def execute(cluster, query, params, options) do
-    %{cluster_name: cluster_name, options: cluster_options} =
-      Xandra.Clusters.Cluster.info(cluster)
+    %{
+      cluster_name: cluster_name,
+      keyspace: keyspace,
+      load_balancing: load_balancing,
+      protocol_module: protocol_module,
+      partitioner: partitioner,
+      options: cluster_options
+    } = Xandra.Clusters.Cluster.info(cluster)
 
     options =
       cluster_options
+      |> Keyword.merge(
+        cluster_name: cluster_name,
+        keyspace: keyspace,
+        load_balancing: load_balancing,
+        protocol_module: protocol_module,
+        partitioner: partitioner
+      )
       |> Keyword.merge(options)
-      |> Keyword.put(:cluster_name, cluster_name)
 
     with_conn_and_retrying(cluster, options, &Xandra.execute(&1, query, params, options))
   end
@@ -244,13 +295,25 @@ defmodule Xandra.Cluster do
   """
   @spec run(cluster, keyword, (Xandra.conn() -> result)) :: result when result: var
   def run(cluster, options \\ [], fun) do
-    %{cluster_name: cluster_name, options: cluster_options} =
-      Xandra.Clusters.Cluster.info(cluster)
+    %{
+      cluster_name: cluster_name,
+      keyspace: keyspace,
+      load_balancing: load_balancing,
+      protocol_module: protocol_module,
+      partitioner: partitioner,
+      options: cluster_options
+    } = Xandra.Clusters.Cluster.info(cluster)
 
     options =
       cluster_options
+      |> Keyword.merge(
+        cluster_name: cluster_name,
+        keyspace: keyspace,
+        load_balancing: load_balancing,
+        protocol_module: protocol_module,
+        partitioner: partitioner
+      )
       |> Keyword.merge(options)
-      |> Keyword.put(:cluster_name, cluster_name)
 
     with_conn(cluster, options, &Xandra.run(&1, options, fun))
   end
@@ -261,7 +324,29 @@ defmodule Xandra.Cluster do
 
   defp with_conn(cluster, options, fun) do
     cluster_name = Keyword.fetch!(options, :cluster_name)
+    keyspace = Keyword.fetch!(options, :keyspace)
+
+    source = Keyword.get(options, :source)
+    query = Keyword.get(options, :query)
+    params = Keyword.get(options, :params)
+
     load_balancing = Keyword.fetch!(options, :load_balancing)
+    protocol_module = Keyword.fetch!(options, :protocol_module)
+    partitioner = Keyword.fetch!(options, :partitioner)
+
+    token =
+      compute_token(
+        cluster_name,
+        keyspace,
+        source,
+        query,
+        params,
+        load_balancing,
+        protocol_module,
+        partitioner
+      )
+
+    options = Keyword.put_new(options, :token, token)
 
     pools =
       Registry.select(ConnectionRegistry, [
@@ -269,7 +354,10 @@ defmodule Xandra.Cluster do
          [{{cluster_name, :"$1", :"$2", :"$3", :"$4"}}]}
       ])
 
-    pool = select_pool(load_balancing, pools, options)
+    pool =
+      load_balancing
+      |> List.wrap()
+      |> select_pool(pools, options)
 
     case pool do
       nil ->
@@ -351,4 +439,155 @@ defmodule Xandra.Cluster do
         select_pool(load_balancing, token_pools, options)
     end
   end
+
+  defp compute_token(
+         _cluster_name,
+         _keyspace,
+         _source = nil,
+         _query,
+         _params,
+         _load_balancing,
+         _protocol_module,
+         _partitioner
+       ),
+       do: nil
+
+  defp compute_token(
+         _cluster_name,
+         _keyspace,
+         _source,
+         _query = nil,
+         _params,
+         _load_balancing,
+         _protocol_module,
+         _partitioner
+       ),
+       do: nil
+
+  defp compute_token(
+         _cluster_name,
+         _keyspace,
+         _source,
+         _query,
+         _params = nil,
+         _load_balancing,
+         _protocol_module,
+         _partitioner
+       ),
+       do: nil
+
+  defp compute_token(
+         _cluster_name,
+         _keyspace,
+         _source,
+         _query,
+         _params,
+         _load_balancing = [],
+         _protocol_module,
+         _partitioner
+       ),
+       do: nil
+
+  defp compute_token(
+         cluster_name,
+         keyspace,
+         source,
+         query,
+         params,
+         _load_balancing = [:token_aware | _],
+         protocol_module,
+         partitioner
+       )
+       when is_binary(query) do
+    if Keyword.keyword?(params) do
+      with {_, %TableMetadata{partition_keys: partition_keys}} <-
+             Clusters.lookup_schema(cluster_name, keyspace, source) do
+        partition_values =
+          partition_keys
+          |> Enum.map(fn {_, field} ->
+            {field, Keyword.get(params, String.to_atom(field))}
+          end)
+          |> Enum.reject(&match?({_, nil}, &1))
+          |> Enum.map(fn {field, {type, value}} ->
+            {type, value}
+          end)
+
+        if Enum.count(partition_values) == Enum.count(partition_keys) do
+          compute_token(partition_values, protocol_module, partitioner)
+        end
+      end
+    end
+  end
+
+  defp compute_token(
+         cluster_name,
+         keyspace,
+         source,
+         %Prepared{bound_columns: bound_columns},
+         params,
+         _load_balancing = [:token_aware | _],
+         protocol_module,
+         partitioner
+       ) do
+    if Enum.count(bound_columns) == Enum.count(params) do
+      with {_, %TableMetadata{partition_keys: partition_keys}} <-
+             Clusters.lookup_schema(cluster_name, keyspace, source) do
+        bound_params = Enum.zip(bound_columns, params)
+
+        partition_values =
+          partition_keys
+          |> Enum.map(fn {_, field} ->
+            Enum.find(bound_params, &match?({{_, _, ^field, _}, _}, &1))
+          end)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.map(fn {{_, _, field, type}, value} ->
+            {Atom.to_string(type), value}
+          end)
+
+        if Enum.count(partition_values) == Enum.count(partition_keys) do
+          compute_token(partition_values, protocol_module, partitioner)
+        end
+      end
+    end
+  end
+
+  defp compute_token(
+         cluster_name,
+         keyspace,
+         source,
+         query,
+         params,
+         [_ | load_balancing],
+         protocol_module,
+         partitioner
+       ) do
+    compute_token(
+      cluster_name,
+      keyspace,
+      source,
+      query,
+      params,
+      load_balancing,
+      protocol_module,
+      partitioner
+    )
+  end
+
+  defp compute_token([partition_value], protocol_module, @murmur3_partitioner) do
+    <<token::little-integer-unsigned-64, _::64>> =
+      protocol_module.encode_partition_key(partition_value)
+      |> :murmur.murmur3_cassandra_x64_128()
+
+    token
+  end
+
+  defp compute_token(partition_values, protocol_module, @murmur3_partitioner) do
+    <<token::little-integer-unsigned-64, _::64>> =
+      protocol_module.encode_partition_keys(partition_values)
+      |> :murmur.murmur3_cassandra_x64_128()
+
+    token
+  end
+
+  defp compute_token(_partition_values, _protocol_module, _partitioner), do: nil
 end

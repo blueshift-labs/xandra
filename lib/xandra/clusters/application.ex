@@ -36,4 +36,11 @@ defmodule Xandra.Clusters.Application do
       ) do
     :ets.insert(@schema_table, {{cluster_name, keyspace_name, table_name}, table})
   end
+
+  def lookup_schema(cluster_name, keyspace_name, table_name) do
+    case :ets.lookup(@schema_table, {cluster_name, keyspace_name, table_name}) do
+      [] -> nil
+      [table] -> table
+    end
+  end
 end

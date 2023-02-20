@@ -62,6 +62,7 @@ defmodule Xandra.Clusters.Cluster do
     :load_balancing,
     :keyspace,
     :protocol_version,
+    :protocol_module,
     :options,
     :cql_version,
     :partitioner,
