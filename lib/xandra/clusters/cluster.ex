@@ -155,12 +155,10 @@ defmodule Xandra.Clusters.Cluster do
       Process.cancel_timer(timer)
     end
 
-    {:ok, ip_address} = :inet.getaddr(to_charlist(address), :inet)
-    Logger.debug("Resolved address for [#{cluster_name}] at [#{ip_address}:#{port}]")
     transport_options = Keyword.put(@transport_options, :active, false)
 
     with {:ok, socket} <-
-           transport.connect(ip_address, port, transport_options, @connection_timeout),
+           transport.connect(to_charlist(address), port, transport_options, @connection_timeout),
          {:ok, {protocol_module, cql_version}} <-
            negotiate_protocol(transport, socket, protocol_version, state),
          :ok <-
@@ -172,35 +170,77 @@ defmodule Xandra.Clusters.Cluster do
             partitioner: partitioner,
             data_center: data_center
           }} <- discover_system_local(transport, socket, protocol_module, state),
+         {:ok, peers} <- discover_system_peers(transport, socket, protocol_module, state),
          :ok <- discover_system_schema(transport, socket, protocol_module, state),
          :ok <- register_to_events(transport, socket, protocol_module, state),
-         :ok <- request_system_peers(transport, socket, protocol_module, state),
-         :ok <-
-           startup_control(
-             cluster_name,
-             host_id,
-             ip_address,
-             rpc_address,
-             port,
-             data_center,
-             options
-           ) do
-      Logger.debug("Successfully connected to cluster [#{cluster_name}] at [#{address}:#{port}]")
+         :ok <- request_system_peers(transport, socket, protocol_module, state) do
+      started =
+        if peers == [] do
+          [
+            startup_control(
+              cluster_name,
+              host_id,
+              address,
+              rpc_address,
+              port,
+              data_center,
+              options
+            )
+          ]
+        else
+          Enum.map(peers, fn %{host_id: host_id, rpc_address: rpc_address} ->
+            startup_control(
+              cluster_name,
+              host_id,
+              rpc_address,
+              rpc_address,
+              port,
+              data_center,
+              options
+            )
+          end)
+        end
 
-      {:ok,
-       %{
-         state
-         | socket: socket,
-           cql_version: cql_version,
-           partitioner: partitioner,
-           data_center: data_center,
-           protocol_module: protocol_module,
-           backoff: @backoff,
-           attempts: 0,
-           buffer: <<>>,
-           timer: nil,
-           error: nil
-       }}
+      case Enum.find(started, &match?(:ok, &1)) do
+        :ok ->
+          Logger.debug(
+            "Successfully connected to cluster [#{cluster_name}] at [#{address}:#{port}]"
+          )
+
+          {:ok,
+           %{
+             state
+             | socket: socket,
+               cql_version: cql_version,
+               partitioner: partitioner,
+               data_center: data_center,
+               protocol_module: protocol_module,
+               backoff: @backoff,
+               attempts: 0,
+               buffer: <<>>,
+               timer: nil,
+               error: nil
+           }}
+
+        nil ->
+          err = Enum.find(started, &match?({:error, _}, &1))
+
+          Logger.error(
+            "Error connecting to cluster [#{cluster_name}] at [#{address}:#{port}], #{inspect(err)}"
+          )
+
+          {wait, backoff} = Backoff.backoff(backoff)
+
+          {:backoff, wait,
+           %{
+             state
+             | backoff: backoff,
+               attempts: attempts + 1,
+               buffer: <<>>,
+               timer: nil,
+               error: err
+           }}
+      end
     else
       {:error, {:use_this_protocol_instead, _failed_protocol_version, protocol_version}} ->
         Logger.debug(
@@ -598,6 +638,32 @@ defmodule Xandra.Clusters.Cluster do
     end
   end
 
+  defp discover_system_peers(
+         transport,
+         socket,
+         protocol_module,
+         %{cluster_name: cluster_name, address: address, port: port}
+       ) do
+    Logger.debug(
+      "Discovering system.peers with cluster [#{cluster_name}] at [#{address}:#{port}]"
+    )
+
+    payload =
+      Frame.new(:query, _options = [])
+      |> protocol_module.encode_request(@system_peers_query)
+      |> Frame.encode(protocol_module)
+
+    protocol_format = Xandra.Protocol.frame_protocol_format(protocol_module)
+
+    with :ok <- transport.send(socket, payload),
+         {:ok, %Frame{} = frame} <-
+           Utils.recv_frame(transport, socket, protocol_format, _compressor = nil),
+         {%Xandra.Page{} = page, _warnings} <-
+           protocol_module.decode_response(%{frame | atom_keys?: true}, @system_peers_query) do
+      {:ok, Enum.to_list(page)}
+    end
+  end
+
   defp request_system_peers(
          transport,
          socket,
@@ -758,7 +824,7 @@ defmodule Xandra.Clusters.Cluster do
     state
   end
 
-  def startup_control(cluster_name, host_id, address, rpc_address, port, data_center, options) do
+  defp startup_control(cluster_name, host_id, address, rpc_address, port, data_center, options) do
     DynamicSupervisor.start_child(
       Controls,
       {Control, {cluster_name, host_id, address, rpc_address, port, data_center, options}}
@@ -787,7 +853,7 @@ defmodule Xandra.Clusters.Cluster do
     end
   end
 
-  def terminate_control(cluster_name, rpc_address, port) do
+  defp terminate_control(cluster_name, rpc_address, port) do
     with [{host_id, pid}] <-
            Registry.select(ControlRegistry, [
              {{{cluster_name, :"$1"}, :"$2", %{rpc_address: rpc_address, port: port}}, [],
@@ -801,7 +867,7 @@ defmodule Xandra.Clusters.Cluster do
     end
   end
 
-  def terminate_controls(cluster_name) do
+  defp terminate_controls(cluster_name) do
     controls =
       Registry.select(ControlRegistry, [
         {{{cluster_name, :"$1"}, :"$2", %{rpc_address: :"$3", port: :"$4"}}, [],
