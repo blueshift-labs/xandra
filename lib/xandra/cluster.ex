@@ -437,6 +437,7 @@ defmodule Xandra.Cluster do
           start_endpoint < token && token <= end_token
 
         {{start_endpoint, end_token}, _} when start_endpoint > end_token ->
+          :telemetry.execute([:xandra, :token_aware, :edge], %{count: 1}, %{})
           token > start_endpoint
       end)
 
@@ -453,6 +454,7 @@ defmodule Xandra.Cluster do
           select_pool(load_balancing, pools, options)
 
         _ ->
+          :telemetry.execute([:xandra, :token_aware, :selected], %{count: 1}, %{})
           select_pool(load_balancing, token_pools, options)
       end
     else
