@@ -155,9 +155,15 @@ defmodule Xandra.Clusters.Monitor do
          port: port,
          options: options
        }) do
+    address =
+      case address do
+        address when is_tuple(address) -> :inet.ntoa(address)
+        _ -> address
+      end
+
     options
     |> Keyword.drop([:address])
-    |> Keyword.merge(nodes: ["#{:inet.ntoa(address)}"], port: port)
+    |> Keyword.merge(nodes: ["#{address}"], port: port)
     |> Keyword.put(
       :name,
       {:via, Registry, {ConnectionRegistry, {cluster_name, host_id}, {rpc_address, port}}}
