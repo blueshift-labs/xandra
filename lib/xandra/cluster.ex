@@ -82,6 +82,7 @@ defmodule Xandra.Cluster do
       cluster_name: cluster_name,
       keyspace: keyspace,
       load_balancing: load_balancing,
+      token_ring: token_ring,
       protocol_module: protocol_module,
       partitioner: partitioner,
       options: cluster_options
@@ -93,6 +94,7 @@ defmodule Xandra.Cluster do
         cluster_name: cluster_name,
         keyspace: keyspace,
         load_balancing: load_balancing,
+        token_ring: token_ring,
         protocol_module: protocol_module,
         partitioner: partitioner
       )
@@ -137,6 +139,7 @@ defmodule Xandra.Cluster do
       cluster_name: cluster_name,
       keyspace: keyspace,
       load_balancing: load_balancing,
+      token_ring: token_ring,
       protocol_module: protocol_module,
       partitioner: partitioner,
       options: cluster_options
@@ -148,6 +151,7 @@ defmodule Xandra.Cluster do
         cluster_name: cluster_name,
         keyspace: keyspace,
         load_balancing: load_balancing,
+        token_ring: token_ring,
         protocol_module: protocol_module,
         partitioner: partitioner
       )
@@ -192,6 +196,7 @@ defmodule Xandra.Cluster do
       cluster_name: cluster_name,
       keyspace: keyspace,
       load_balancing: load_balancing,
+      token_ring: token_ring,
       protocol_module: protocol_module,
       partitioner: partitioner,
       options: cluster_options
@@ -203,6 +208,7 @@ defmodule Xandra.Cluster do
         cluster_name: cluster_name,
         keyspace: keyspace,
         load_balancing: load_balancing,
+        token_ring: token_ring,
         protocol_module: protocol_module,
         partitioner: partitioner
       )
@@ -242,6 +248,7 @@ defmodule Xandra.Cluster do
       cluster_name: cluster_name,
       keyspace: keyspace,
       load_balancing: load_balancing,
+      token_ring: token_ring,
       protocol_module: protocol_module,
       partitioner: partitioner,
       options: cluster_options
@@ -253,6 +260,7 @@ defmodule Xandra.Cluster do
         cluster_name: cluster_name,
         keyspace: keyspace,
         load_balancing: load_balancing,
+        token_ring: token_ring,
         protocol_module: protocol_module,
         partitioner: partitioner
       )
@@ -299,6 +307,7 @@ defmodule Xandra.Cluster do
       cluster_name: cluster_name,
       keyspace: keyspace,
       load_balancing: load_balancing,
+      token_ring: token_ring,
       protocol_module: protocol_module,
       partitioner: partitioner,
       options: cluster_options
@@ -310,6 +319,7 @@ defmodule Xandra.Cluster do
         cluster_name: cluster_name,
         keyspace: keyspace,
         load_balancing: load_balancing,
+        token_ring: token_ring,
         protocol_module: protocol_module,
         partitioner: partitioner
       )
@@ -331,6 +341,7 @@ defmodule Xandra.Cluster do
     params = Keyword.get(options, :params)
 
     load_balancing = Keyword.fetch!(options, :load_balancing)
+    token_ring = Keyword.fetch!(options, :token_ring)
     protocol_module = Keyword.fetch!(options, :protocol_module)
     partitioner = Keyword.fetch!(options, :partitioner)
 
@@ -346,7 +357,7 @@ defmodule Xandra.Cluster do
         partitioner
       )
 
-    options = Keyword.put_new(options, :token, token)
+    options = Keyword.merge(options, token: token, token_ring: token_ring)
 
     pools =
       Registry.select(ConnectionRegistry, [
@@ -387,7 +398,8 @@ defmodule Xandra.Cluster do
 
   defp select_pool([:token_aware | _] = load_balancing, pools, options) do
     {token, options} = Keyword.pop(options, :token)
-    select_pool(load_balancing, pools, token, options)
+    {token_ring, options} = Keyword.pop(options, :token_ring)
+    select_pool(load_balancing, pools, token, token_ring, options)
   end
 
   defp select_pool([_ | load_balancing], pools, options) do
@@ -417,27 +429,39 @@ defmodule Xandra.Cluster do
     end
   end
 
-  defp select_pool([:token_aware | load_balancing], pools, nil, options) do
-    select_pool(load_balancing, pools, options)
-  end
+  defp select_pool([:token_aware | load_balancing], pools, token, token_ring, options)
+       when is_integer(token) and is_list(token_ring) do
+    endpoints =
+      Enum.find(token_ring, fn
+        {{start_endpoint, end_token}, _} when start_endpoint < end_token ->
+          start_endpoint < token && token <= end_token
 
-  defp select_pool([:token_aware | load_balancing], pools, _token, options) do
-    token_pools =
-      Enum.filter(pools, fn {cluster_name, host_id, _pid, _rpc_address, _port} ->
-        Registry.lookup(ControlRegistry, {cluster_name, host_id})
-        |> case do
-          [{_, %Peer{}}] -> true
-          _ -> false
-        end
+        {{start_endpoint, end_token}, _} when start_endpoint > end_token ->
+          token > start_endpoint
       end)
 
-    case token_pools do
-      [] ->
-        select_pool(load_balancing, pools, options)
+    with {_, endpoints} <- endpoints do
+      endpoints = MapSet.new(endpoints)
 
-      _ ->
-        select_pool(load_balancing, token_pools, options)
+      token_pools =
+        Enum.filter(pools, fn {_cluster_name, _host_id, _pid, rpc_address, _port} ->
+          MapSet.member?(endpoints, rpc_address)
+        end)
+
+      case token_pools do
+        [] ->
+          select_pool(load_balancing, pools, options)
+
+        _ ->
+          select_pool(load_balancing, token_pools, options)
+      end
+    else
+      _ -> select_pool(load_balancing, pools, options)
     end
+  end
+
+  defp select_pool([:token_aware | load_balancing], pools, _token, _token_ring, options) do
+    select_pool(load_balancing, pools, options)
   end
 
   defp compute_token(
@@ -508,7 +532,7 @@ defmodule Xandra.Cluster do
             {field, Keyword.get(params, String.to_atom(field))}
           end)
           |> Enum.reject(&match?({_, nil}, &1))
-          |> Enum.map(fn {field, {type, value}} ->
+          |> Enum.map(fn {_field, {type, value}} ->
             {type, value}
           end)
 
@@ -540,7 +564,7 @@ defmodule Xandra.Cluster do
             Enum.find(bound_params, &match?({{_, _, ^field, _}, _}, &1))
           end)
           |> Enum.reject(&is_nil/1)
-          |> Enum.map(fn {{_, _, field, type}, value} ->
+          |> Enum.map(fn {{_, _, _field, type}, value} ->
             {Atom.to_string(type), value}
           end)
 
@@ -574,7 +598,7 @@ defmodule Xandra.Cluster do
   end
 
   defp compute_token([partition_value], protocol_module, @murmur3_partitioner) do
-    <<token::little-integer-unsigned-64, _::64>> =
+    <<token::little-integer-signed-64, _::64>> =
       protocol_module.encode_partition_key(partition_value)
       |> :murmur.murmur3_cassandra_x64_128()
 
@@ -582,7 +606,7 @@ defmodule Xandra.Cluster do
   end
 
   defp compute_token(partition_values, protocol_module, @murmur3_partitioner) do
-    <<token::little-integer-unsigned-64, _::64>> =
+    <<token::little-integer-signed-64, _::64>> =
       protocol_module.encode_partition_keys(partition_values)
       |> :murmur.murmur3_cassandra_x64_128()
 

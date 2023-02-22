@@ -30,6 +30,7 @@ defmodule Xandra.Clusters.Cluster do
     :cql_version,
     :partitioner,
     :data_center,
+    :token_ring,
     :protocol_module,
     :socket,
     :timer,
@@ -41,7 +42,7 @@ defmodule Xandra.Clusters.Cluster do
   alias __MODULE__
   alias Xandra.{Frame, Simple, TableMetadata, StatusChange, TopologyChange, Connection.Utils}
   alias Xandra.Clusters.Application, as: Clusters
-  alias Xandra.Clusters.{ControlRegistry, Controls, Control}
+  alias Xandra.Clusters.{ControlRegistry, ConnectionRegistry, Controls, Control}
 
   alias DBConnection.Backoff
 
@@ -66,7 +67,8 @@ defmodule Xandra.Clusters.Cluster do
     :options,
     :cql_version,
     :partitioner,
-    :data_center
+    :data_center,
+    :token_ring
   ]
 
   @system_peers_query %Simple{
@@ -92,6 +94,8 @@ defmodule Xandra.Clusters.Cluster do
     protocol_version = Keyword.get(options, :protocol_version)
 
     Process.flag(:trap_exit, true)
+
+    Process.send_after(self(), :syncup_token_ring, 3000)
 
     state = %Cluster{
       cluster_name: cluster_name,
@@ -249,6 +253,13 @@ defmodule Xandra.Clusters.Cluster do
     handle_message(%{state | buffer: buffer <> message})
   end
 
+  def handle_info(:syncup_token_ring, state) do
+    state = syncup_token_ring(state)
+    Process.send_after(self(), :syncup_token_ring, @discover_interval)
+
+    {:noreply, state}
+  end
+
   def handle_info(
         :request_system_peers,
         %{
@@ -391,6 +402,65 @@ defmodule Xandra.Clusters.Cluster do
 
     requested_options = %{"CQL_VERSION" => cql_version}
     Utils.startup_connection(transport, socket, requested_options, protocol_module, nil, options)
+  end
+
+  defp syncup_token_ring(
+         %{
+           cluster_name: cluster_name,
+           keyspace: keyspace,
+           data_center: data_center,
+           address: address,
+           port: port
+         } = state
+       ) do
+    Logger.debug(
+      "Syncing up system.token_ring for keyspace [#{keyspace}] with cluster [#{cluster_name}] at [#{address}:#{port}]"
+    )
+
+    with [{conn_pid} | _] <- random_connections(cluster_name) do
+      query =
+        "SELECT start_token, end_token, endpoint, dc FROM system.token_ring where keyspace_name = ? LIMIT 1000000"
+
+      stream = Xandra.stream_pages!(conn_pid, query, [{"text", keyspace}], [])
+
+      %{rows: rows} =
+        Enum.reduce_while(stream, %{rows: [], num_rows: 0}, fn
+          %Xandra.Page{} = page, %{rows: rows, num_rows: num_rows} ->
+            %{rows: new_rows, num_rows: new_num_rows} = process_page(page)
+            {:cont, %{rows: rows ++ new_rows, num_rows: num_rows + new_num_rows}}
+        end)
+
+      token_ring =
+        rows
+        |> Enum.filter(fn [_, _, _, dc] -> dc == data_center end)
+        |> Enum.map(fn [start_token, end_token, rpc_address, _] ->
+          {start_token, ""} = Integer.parse(start_token)
+          {end_token, ""} = Integer.parse(end_token)
+          {start_token, end_token, rpc_address}
+        end)
+        |> Enum.group_by(
+          fn {start_token, end_token, _} -> {start_token, end_token} end,
+          fn {_, _, rpc_address} -> rpc_address end
+        )
+        |> Enum.into([])
+        |> Enum.sort_by(fn {{start_token, _}, _} -> start_token end)
+
+      %{state | token_ring: token_ring}
+    else
+      [] -> state
+    end
+  rescue
+    err ->
+      Logger.error(
+        "Error syncing up system.token_ring for keyspace [#{keyspace}] with cluster [#{cluster_name}] at [#{address}:#{port}], #{inspect(err)}"
+      )
+
+      state
+  end
+
+  defp random_connections(cluster_name) do
+    Registry.select(ConnectionRegistry, [{{{cluster_name, :_}, :"$1", :_}, [], [{{:"$1"}}]}])
+    |> Enum.shuffle()
   end
 
   defp discover_system_local(
@@ -749,4 +819,28 @@ defmodule Xandra.Clusters.Cluster do
 
   defp inet_mod(:gen_tcp), do: :inet
   defp inet_mod(:ssl), do: :ssl
+
+  defp process_page(%Xandra.Page{columns: [{_, _, "[applied]", _} | _], content: content}) do
+    rows =
+      content
+      |> Enum.reject(&match?([false | _], &1))
+      |> Enum.map(fn [_ | row] -> row end)
+
+    %{rows: rows, num_rows: length(rows)}
+  end
+
+  defp process_page(%Xandra.Page{
+         columns: [{_, _, "system.count" <> _, _} | _],
+         content: [[count]]
+       }) do
+    %{rows: [[count]], num_rows: 1}
+  end
+
+  defp process_page(%Xandra.Page{columns: [{_, _, "count" <> _, _} | _], content: [[count]]}) do
+    %{rows: [[count]], num_rows: 1}
+  end
+
+  defp process_page(%Xandra.Page{content: content}) do
+    %{rows: content, num_rows: length(content)}
+  end
 end
