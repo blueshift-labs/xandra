@@ -448,7 +448,7 @@ defmodule Xandra.Clusters.Control do
       [{pid, %{address: addr, rpc_address: rpc_addr}}] ->
         unless addr == rpc_addr do
           Logger.warn(
-            "Terminating discovery control connection for cluster [#{cluster_name}] at [#{addr}:#{port}]@[#{host_id}]"
+            "Terminating control connection for cluster [#{cluster_name}] at [#{addr}:#{port}]@[#{host_id}]"
           )
 
           DynamicSupervisor.terminate_child(Controls, pid)
