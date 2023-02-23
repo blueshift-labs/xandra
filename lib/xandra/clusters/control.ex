@@ -216,18 +216,10 @@ defmodule Xandra.Clusters.Control do
       "Discovering peers with cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}]"
     )
 
-    with {:ok, system_peers} <- discover_system_peers(state),
-         {:ok, cluster_status} <- discover_cluster_status(state) do
-      cluster_status =
-        cluster_status
-        |> Enum.into(%{}, fn %{host_id: host_id, up: up} ->
-          {host_id, up}
-        end)
-
+    with {:ok, system_peers} <- discover_system_peers(state) do
       peers =
         system_peers
         |> Enum.filter(&match?(%{data_center: ^data_center}, &1))
-        |> Enum.filter(&cluster_status[&1[:host_id]])
 
       Logger.debug(
         "Discovered peers with cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}], [#{inspect(peers)}]"
