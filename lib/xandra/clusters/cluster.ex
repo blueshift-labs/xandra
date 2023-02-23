@@ -95,6 +95,8 @@ defmodule Xandra.Clusters.Cluster do
 
     Process.flag(:trap_exit, true)
 
+    Process.send_after(self(), :syncup_token_ring, 3000)
+
     state = %Cluster{
       cluster_name: cluster_name,
       address: address,
