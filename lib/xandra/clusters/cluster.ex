@@ -758,7 +758,7 @@ defmodule Xandra.Clusters.Cluster do
     state
   end
 
-  def startup_control(cluster_name, host_id, address, rpc_address, port, data_center, options) do
+  defp startup_control(cluster_name, host_id, address, rpc_address, port, data_center, options) do
     DynamicSupervisor.start_child(
       Controls,
       {Control, {cluster_name, host_id, address, rpc_address, port, data_center, options}}
@@ -787,7 +787,7 @@ defmodule Xandra.Clusters.Cluster do
     end
   end
 
-  def terminate_control(cluster_name, rpc_address, port) do
+  defp terminate_control(cluster_name, rpc_address, port) do
     with [{host_id, pid}] <-
            Registry.select(ControlRegistry, [
              {{{cluster_name, :"$1"}, :"$2", %{rpc_address: rpc_address, port: port}}, [],
@@ -801,7 +801,7 @@ defmodule Xandra.Clusters.Cluster do
     end
   end
 
-  def terminate_controls(cluster_name) do
+  defp terminate_controls(cluster_name) do
     controls =
       Registry.select(ControlRegistry, [
         {{{cluster_name, :"$1"}, :"$2", %{rpc_address: :"$3", port: :"$4"}}, [],

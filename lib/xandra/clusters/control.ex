@@ -63,7 +63,8 @@ defmodule Xandra.Clusters.Control do
       {cluster_name, host_id, address, rpc_address, port, data_center, options},
       name:
         {:via, Registry,
-         {ControlRegistry, {cluster_name, host_id}, %{rpc_address: rpc_address, port: port}}}
+         {ControlRegistry, {cluster_name, host_id},
+          %{address: address, rpc_address: rpc_address, port: port}}}
     )
   end
 
@@ -344,6 +345,7 @@ defmodule Xandra.Clusters.Control do
   defp discover_system_local(%{
          cluster_name: cluster_name,
          host_id: host_id,
+         address: address,
          port: port,
          transport: transport,
          protocol_module: protocol_module,
@@ -369,7 +371,7 @@ defmodule Xandra.Clusters.Control do
         protocol_module.decode_response(%{frame | atom_keys?: true}, query)
 
       [system_local] = Enum.to_list(page)
-      peer = Peer.from_system_local(cluster_name, port, system_local)
+      peer = Peer.from_system_local(cluster_name, address, port, system_local)
 
       Registry.update_value(ControlRegistry, {cluster_name, host_id}, fn _ -> peer end)
 
@@ -449,7 +451,21 @@ defmodule Xandra.Clusters.Control do
     end
   end
 
-  def startup_control(cluster_name, host_id, address, rpc_address, port, data_center, options) do
+  defp startup_control(cluster_name, host_id, address, rpc_address, port, data_center, options) do
+    case Registry.lookup(ControlRegistry, {cluster_name, host_id}) do
+      [{pid, %{address: addr, rpc_address: rpc_addr}}] ->
+        unless addr == rpc_addr do
+          Logger.warn(
+            "Terminating discovery control connection for cluster [#{cluster_name}] at [#{addr}:#{port}]@[#{host_id}]"
+          )
+
+          DynamicSupervisor.terminate_child(Controls, pid)
+        end
+
+      _ ->
+        nil
+    end
+
     DynamicSupervisor.start_child(
       Controls,
       {Control, {cluster_name, host_id, address, rpc_address, port, data_center, options}}
