@@ -431,13 +431,19 @@ defmodule Xandra.Cluster do
 
   defp select_pool([:token_aware | load_balancing], pools, token, token_ring, options)
        when is_integer(token) and is_list(token_ring) do
+    metadata =
+      options
+      |> Keyword.take([:cluster_name, :keyspace, :source])
+      |> Enum.reject(&match?({_, nil}, &1))
+      |> Enum.into(%{})
+
     endpoints =
       Enum.find(token_ring, fn
         {{start_endpoint, end_token}, _} when start_endpoint < end_token ->
           start_endpoint < token && token <= end_token
 
         {{start_endpoint, end_token}, _} when start_endpoint > end_token ->
-          :telemetry.execute([:xandra, :token_aware, :edge], %{count: 1}, %{})
+          :telemetry.execute([:xandra, :token_aware, :edge], %{count: 1}, metadata)
           token > start_endpoint
       end)
 
@@ -454,7 +460,7 @@ defmodule Xandra.Cluster do
           select_pool(load_balancing, pools, options)
 
         _ ->
-          :telemetry.execute([:xandra, :token_aware, :selected], %{count: 1}, %{})
+          :telemetry.execute([:xandra, :token_aware, :selected], %{count: 1}, metadata)
           select_pool(load_balancing, token_pools, options)
       end
     else
