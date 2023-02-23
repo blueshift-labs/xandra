@@ -53,7 +53,7 @@ defmodule Xandra.Clusters.Control do
         :start_link,
         [{cluster_name, host_id, address, rpc_address, port, data_center, options}]
       },
-      type: :worker
+      type: :supervisor
     }
   end
 

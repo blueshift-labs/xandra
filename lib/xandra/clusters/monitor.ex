@@ -107,23 +107,6 @@ defmodule Xandra.Clusters.Monitor do
     {:noreply, %{state | backoff: backoff}}
   end
 
-  def handle_info(
-        {:EXIT, _pid, :killed},
-        %{
-          cluster_name: cluster_name,
-          host_id: host_id,
-          address: address,
-          rpc_address: rpc_address,
-          port: port
-        } = state
-      ) do
-    Logger.warn(
-      "Connection pool killed for cluster [#{cluster_name}] at [#{address}/#{rpc_address}:#{port}]@[#{host_id}]}"
-    )
-
-    {:noreply, state}
-  end
-
   @impl true
   def terminate(
         reason,
