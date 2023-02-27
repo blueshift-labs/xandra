@@ -842,7 +842,7 @@ defmodule Xandra.Clusters.Cluster do
   defp startup_control(cluster_name, host_id, address, rpc_address, port, data_center, options) do
     DynamicSupervisor.start_child(
       Controls,
-      {Control, {cluster_name, host_id, address, rpc_address, port, data_center, options}}
+      {Control, {self(), cluster_name, host_id, address, rpc_address, port, data_center, options}}
     )
     |> case do
       {:ok, _} ->

@@ -220,6 +220,7 @@ defmodule Xandra.Clusters.Control do
   def handle_info(
         :discover_peers,
         %{
+          cluster: cluster,
           cluster_name: cluster_name,
           host_id: host_id,
           rpc_address: rpc_address,
@@ -251,6 +252,7 @@ defmodule Xandra.Clusters.Control do
 
       Enum.each(peers, fn %{host_id: host_id, rpc_address: rpc_address} ->
         startup_control(
+          cluster,
           cluster_name,
           host_id,
           rpc_address,
@@ -467,10 +469,20 @@ defmodule Xandra.Clusters.Control do
     end
   end
 
-  defp startup_control(cluster_name, host_id, address, rpc_address, port, data_center, options) do
+  defp startup_control(
+         cluster,
+         cluster_name,
+         host_id,
+         address,
+         rpc_address,
+         port,
+         data_center,
+         options
+       ) do
     DynamicSupervisor.start_child(
       Controls,
-      {Control, {cluster_name, host_id, address, rpc_address, port, data_center, options}}
+      {Control,
+       {cluster, cluster_name, host_id, address, rpc_address, port, data_center, options}}
     )
     |> case do
       {:ok, _} ->
