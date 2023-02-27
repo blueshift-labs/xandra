@@ -77,6 +77,14 @@ defmodule Xandra.Clusters.Cluster do
     default_consistency: :one
   }
 
+  def report_failure(cluster, {cluster_name, host_id, rpc_address, port}) do
+    Logger.warn(
+      "Received report on failed node for cluster [#{cluster_name}], at [#{rpc_address}:#{port}]@[#{host_id}]"
+    )
+
+    GenServer.cast(cluster, {:report_failure, {cluster_name, host_id, rpc_address, port}})
+  end
+
   def info(cluster) do
     Connection.call(cluster, :info)
   end
@@ -266,6 +274,13 @@ defmodule Xandra.Clusters.Cluster do
         {:backoff, wait,
          %{state | backoff: backoff, attempts: attempts + 1, buffer: <<>>, timer: nil, error: err}}
     end
+  end
+
+  @impl true
+  def handle_cast({:report_failure, {cluster_name, _host_id, rpc_address, port}}, state) do
+    terminate_control(cluster_name, rpc_address, port)
+
+    {:noreply, state}
   end
 
   @impl true

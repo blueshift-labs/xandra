@@ -1,5 +1,6 @@
 defmodule Xandra.Clusters.Control do
   @enforce_keys [
+    :cluster,
     :cluster_name,
     :host_id,
     :address,
@@ -14,6 +15,7 @@ defmodule Xandra.Clusters.Control do
   ]
 
   defstruct [
+    :cluster,
     :cluster_name,
     :host_id,
     :address,
@@ -34,7 +36,7 @@ defmodule Xandra.Clusters.Control do
 
   alias __MODULE__
   alias Xandra.{Frame, Simple, Connection.Utils}
-  alias Xandra.Clusters.{ControlRegistry, Controls, Monitor, Peer}
+  alias Xandra.Clusters.{Cluster, ControlRegistry, Controls, Monitor, Peer}
   alias DBConnection.Backoff
 
   require Logger
@@ -45,22 +47,26 @@ defmodule Xandra.Clusters.Control do
   @discover_interval 30_000
   @transport_options [packet: :raw, mode: :binary, keepalive: true, nodelay: true]
 
-  def child_spec({cluster_name, host_id, address, rpc_address, port, data_center, options}) do
+  def child_spec(
+        {cluster, cluster_name, host_id, address, rpc_address, port, data_center, options}
+      ) do
     %{
       id: __MODULE__,
       start: {
         __MODULE__,
         :start_link,
-        [{cluster_name, host_id, address, rpc_address, port, data_center, options}]
+        [{cluster, cluster_name, host_id, address, rpc_address, port, data_center, options}]
       },
       type: :worker
     }
   end
 
-  def start_link({cluster_name, host_id, address, rpc_address, port, data_center, options}) do
+  def start_link(
+        {cluster, cluster_name, host_id, address, rpc_address, port, data_center, options}
+      ) do
     Connection.start_link(
       __MODULE__,
-      {cluster_name, host_id, address, rpc_address, port, data_center, options},
+      {cluster, cluster_name, host_id, address, rpc_address, port, data_center, options},
       name:
         {:via, Registry,
          {ControlRegistry, {cluster_name, host_id},
@@ -69,7 +75,7 @@ defmodule Xandra.Clusters.Control do
   end
 
   @impl true
-  def init({cluster_name, host_id, address, rpc_address, port, data_center, options}) do
+  def init({cluster, cluster_name, host_id, address, rpc_address, port, data_center, options}) do
     encryption = Keyword.get(options, :encryption)
     transport = if encryption, do: :ssl, else: :gen_tcp
     protocol_version = Keyword.get(options, :protocol_version)
@@ -77,6 +83,7 @@ defmodule Xandra.Clusters.Control do
     Process.flag(:trap_exit, true)
 
     state = %Control{
+      cluster: cluster,
       cluster_name: cluster_name,
       host_id: host_id,
       address: address,
@@ -97,6 +104,7 @@ defmodule Xandra.Clusters.Control do
   def connect(
         _,
         %{
+          cluster: cluster,
           cluster_name: cluster_name,
           host_id: host_id,
           rpc_address: rpc_address,
@@ -109,6 +117,8 @@ defmodule Xandra.Clusters.Control do
     Logger.error(
       "Failed to start control connection to cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}], #{inspect(err)}"
     )
+
+    Cluster.report_failure(cluster, {cluster_name, host_id, rpc_address, port})
 
     {:stop, err, state}
   end
