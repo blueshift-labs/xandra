@@ -41,10 +41,9 @@ defmodule Xandra.Clusters.Control do
 
   require Logger
 
-  @backoff Backoff.new(backoff_type: :rand_exp, backoff_min: 1_000, backoff_max: 30_000)
-  @max_attempts 10
+  @backoff Backoff.new(backoff_type: :rand_exp, backoff_min: 5_000, backoff_max: 60_000)
+  @max_attempts 5
   @connection_timeout 5_000
-  @discover_interval 30_000
   @transport_options [packet: :raw, mode: :binary, keepalive: true, nodelay: true]
 
   def child_spec(
@@ -161,6 +160,8 @@ defmodule Xandra.Clusters.Control do
         "Successfully started control connection to cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}]"
       )
 
+      Process.send_after(self(), :discover, 0)
+
       {:ok,
        %{
          state
@@ -169,7 +170,7 @@ defmodule Xandra.Clusters.Control do
            backoff: @backoff,
            attempts: 0,
            error: nil
-       }, 0}
+       }}
     else
       {:error, {:use_this_protocol_instead, _failed_protocol_version, protocol_version}} ->
         Logger.debug(
@@ -190,35 +191,7 @@ defmodule Xandra.Clusters.Control do
 
   @impl true
   def handle_info(
-        :timeout,
-        %{
-          cluster_name: cluster_name,
-          host_id: host_id,
-          rpc_address: rpc_address,
-          port: port
-        } = state
-      ) do
-    Logger.debug(
-      "Discovering system.local with cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}]"
-    )
-
-    case discover_system_local(state) do
-      :ok ->
-        Process.send_after(self(), :discover_peers, 0)
-
-        {:noreply, state, @discover_interval}
-
-      err ->
-        Logger.debug(
-          "Error discovering system.local with cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}], #{inspect(err)}"
-        )
-
-        {:stop, err, state}
-    end
-  end
-
-  def handle_info(
-        :discover_peers,
+        :discover,
         %{
           cluster: cluster,
           cluster_name: cluster_name,
@@ -233,7 +206,8 @@ defmodule Xandra.Clusters.Control do
       "Discovering peers with cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}]"
     )
 
-    with {:ok, system_peers} <- discover_system_peers(state),
+    with :ok <- discover_system_local(state),
+         {:ok, system_peers} <- discover_system_peers(state),
          {:ok, cluster_status} <- discover_cluster_status(state) do
       cluster_status =
         cluster_status
@@ -364,11 +338,16 @@ defmodule Xandra.Clusters.Control do
          cluster_name: cluster_name,
          host_id: host_id,
          address: address,
+         rpc_address: rpc_address,
          port: port,
          transport: transport,
          protocol_module: protocol_module,
          socket: socket
        }) do
+    Logger.debug(
+      "Discovering system.local with cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}]"
+    )
+
     query = %Simple{
       statement: "SELECT * FROM system.local",
       values: [],
