@@ -163,7 +163,7 @@ defmodule Xandra.Clusters.Monitor do
 
     options
     |> Keyword.drop([:address])
-    |> Keyword.merge(nodes: ["#{address}"], port: port)
+    |> Keyword.merge(nodes: ["#{address}:#{port}"], port: port)
     |> Keyword.put(
       :name,
       {:via, Registry, {ConnectionRegistry, {cluster_name, host_id}, {rpc_address, port}}}
