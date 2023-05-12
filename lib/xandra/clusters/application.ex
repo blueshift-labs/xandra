@@ -7,10 +7,19 @@ defmodule Xandra.Clusters.Application do
   require Logger
 
   @schema_table :xandra_schema
+  @cluster_info :xandra_cluster_info
 
   @impl true
   def start(_type, _args) do
     :ets.new(@schema_table, [
+      :named_table,
+      :set,
+      :public,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    :ets.new(@cluster_info, [
       :named_table,
       :set,
       :public,
@@ -41,6 +50,17 @@ defmodule Xandra.Clusters.Application do
     case :ets.lookup(@schema_table, {cluster_name, keyspace_name, table_name}) do
       [] -> nil
       [table] -> table
+    end
+  end
+
+  def register_cluster_info(cluster, info) do
+    :ets.insert(@cluster_info, {cluster, info})
+  end
+
+  def lookup_cluster_info(cluster) do
+    case :ets.lookup(@cluster_info, cluster) do
+      [] -> nil
+      [{^cluster, info}] -> info
     end
   end
 end

@@ -86,7 +86,14 @@ defmodule Xandra.Clusters.Cluster do
   end
 
   def info(cluster) do
-    Connection.call(cluster, :info)
+    with nil <- Clusters.lookup_cluster_info(cluster) do
+      Connection.call(cluster, :info)
+    end
+  end
+
+  def register_cluster_info(cluster, state) do
+    info = Map.take(state, @exposed_state)
+    Clusters.register_cluster_info(cluster, info)
   end
 
   @impl true
@@ -119,6 +126,8 @@ defmodule Xandra.Clusters.Cluster do
       peers: [],
       buffer: <<>>
     }
+
+    register_cluster_info(self(), state)
 
     {:connect, :init, state}
   end
@@ -215,20 +224,23 @@ defmodule Xandra.Clusters.Cluster do
             "Successfully connected to cluster [#{cluster_name}] at [#{address}:#{port}]"
           )
 
-          {:ok,
-           %{
-             state
-             | socket: socket,
-               cql_version: cql_version,
-               partitioner: partitioner,
-               data_center: data_center,
-               protocol_module: protocol_module,
-               backoff: @backoff,
-               attempts: 0,
-               buffer: <<>>,
-               timer: nil,
-               error: nil
-           }}
+          state = %{
+            state
+            | socket: socket,
+              cql_version: cql_version,
+              partitioner: partitioner,
+              data_center: data_center,
+              protocol_module: protocol_module,
+              backoff: @backoff,
+              attempts: 0,
+              buffer: <<>>,
+              timer: nil,
+              error: nil
+          }
+
+          register_cluster_info(self(), state)
+
+          {:ok, state}
 
         nil ->
           err = Enum.find(started, &match?({:error, _}, &1))
@@ -255,14 +267,17 @@ defmodule Xandra.Clusters.Cluster do
           "Switch to protocol #{protocol_version} for cluster [#{cluster_name}] at [#{address}:#{port}]"
         )
 
-        {:backoff, 0,
-         %{
-           state
-           | socket: nil,
-             protocol_version: protocol_version,
-             buffer: <<>>,
-             timer: nil
-         }}
+        state = %{
+          state
+          | socket: nil,
+            protocol_version: protocol_version,
+            buffer: <<>>,
+            timer: nil
+        }
+
+        register_cluster_info(self(), state)
+
+        {:backoff, 0, state}
 
       {:error, err} ->
         Logger.error(
@@ -310,6 +325,7 @@ defmodule Xandra.Clusters.Cluster do
 
   def handle_info(:syncup_token_ring, state) do
     state = syncup_token_ring(state)
+    register_cluster_info(self(), state)
     Process.send_after(self(), :syncup_token_ring, @discover_interval)
 
     {:noreply, state}
