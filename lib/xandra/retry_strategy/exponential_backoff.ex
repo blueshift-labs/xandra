@@ -24,8 +24,36 @@ defmodule Xandra.RetryStrategy.ExponentialBackoff do
 
     :telemetry.execute([:xandra, :retry], %{count: 1}, metadata)
 
+    load_balancing = Keyword.get(options, :load_balancing) |> fallback_load_balancing(metadata)
+    options = Keyword.put(options, :load_balancing, load_balancing)
+
     {sleep, backoff} = Backoff.backoff(backoff)
     Process.sleep(sleep)
+
     {:retry, options, %{retry_count: retry_count - 1, backoff: backoff}}
+  end
+
+  defp fallback_load_balancing(nil, metadata) do
+    fallback_load_balancing([], metadata)
+  end
+
+  defp fallback_load_balancing([], metadata) do
+    :telemetry.execute(
+      [:xandra, :fallback_load_balancing],
+      %{count: 1},
+      Map.put(metadata, :load_balancing, :all)
+    )
+
+    []
+  end
+
+  defp fallback_load_balancing([algo | load_balancing], metadata) do
+    :telemetry.execute(
+      [:xandra, :fallback_load_balancing],
+      %{count: 1},
+      Map.put(metadata, :load_balancing, algo)
+    )
+
+    load_balancing
   end
 end

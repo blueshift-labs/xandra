@@ -329,7 +329,10 @@ defmodule Xandra.Cluster do
   end
 
   defp with_conn_and_retrying(cluster, options, fun) do
-    RetryStrategy.run_with_retrying(options, fn -> with_conn(cluster, options, fun) end)
+    RetryStrategy.run_with_retrying(options, fn opts ->
+      options = Keyword.merge(options, opts)
+      with_conn(cluster, options, fun)
+    end)
   end
 
   defp with_conn(cluster, options, fun) do

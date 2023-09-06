@@ -115,16 +115,16 @@ defmodule Xandra.RetryStrategy do
               :error | {:retry, new_options :: keyword, new_state :: state}
 
   @doc false
-  @spec run_with_retrying(keyword, (() -> result)) :: result when result: var
+  @spec run_with_retrying(keyword, (keyword -> result)) :: result when result: var
   def run_with_retrying(options, fun) do
     case Keyword.pop(options, :retry_strategy) do
-      {nil, _options} -> fun.()
+      {nil, _options} -> fun.(options)
       {retry_strategy, options} -> run_with_retrying(options, retry_strategy, fun)
     end
   end
 
   defp run_with_retrying(options, retry_strategy, fun) do
-    with {:error, reason} <- fun.() do
+    with {:error, reason} <- fun.(options) do
       {retry_state, options} =
         Keyword.pop_lazy(options, :retrying_state, fn ->
           retry_strategy.new(options)
