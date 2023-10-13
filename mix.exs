@@ -81,6 +81,7 @@ defmodule Xandra.Mixfile do
   defp deps() do
     [
       {:db_connection, "~> 2.0"},
+      {:connection, "~> 1.1"},
       {:decimal, "~> 2.0", optional: true},
       {:murmur, git: "https://github.com/lpgauth/murmur.git", tag: "0.1.2"},
       {:nimble_options, "~> 0.4.0"},
