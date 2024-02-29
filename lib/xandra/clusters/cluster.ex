@@ -78,7 +78,7 @@ defmodule Xandra.Clusters.Cluster do
   }
 
   def report_failure(cluster, {cluster_name, host_id, rpc_address, port}) do
-    Logger.warn(
+    Logger.warning(
       "Received report on failed node for cluster [#{cluster_name}], at [#{rpc_address}:#{port}]@[#{host_id}]"
     )
 
@@ -374,7 +374,7 @@ defmodule Xandra.Clusters.Cluster do
         options
       )
     else
-      Logger.warn("Ignoring node [#{rpc_address}:#{port}], not discovered in peers")
+      Logger.warning("Ignoring node [#{rpc_address}:#{port}], not discovered in peers")
     end
 
     {:noreply, state}
@@ -391,7 +391,7 @@ defmodule Xandra.Clusters.Cluster do
           port: port
         } = state
       ) do
-    Logger.warn(
+    Logger.warning(
       "Disconnecting from cluster [#{cluster_name}] at [#{address}:#{port}], #{inspect(err)}"
     )
 
@@ -797,7 +797,7 @@ defmodule Xandra.Clusters.Cluster do
            port: port
          } = state
        ) do
-    Logger.warn(
+    Logger.warning(
       "Received status_change [DOWN] event from cluster [#{cluster_name}] at [#{address}:#{port}], #{inspect(event)}"
     )
 
@@ -831,7 +831,7 @@ defmodule Xandra.Clusters.Cluster do
            port: port
          } = state
        ) do
-    Logger.warn(
+    Logger.warning(
       "Received topology_change [MOVED_NODE] event from cluster [#{cluster_name}] at [#{address}:#{port}], #{inspect(event)}, ignored"
     )
 
@@ -846,7 +846,7 @@ defmodule Xandra.Clusters.Cluster do
            port: port
          } = state
        ) do
-    Logger.warn(
+    Logger.warning(
       "Received topology_change [REMOVED_NODE] event from cluster [#{cluster_name}] at [#{address}:#{port}], #{inspect(event)}"
     )
 
