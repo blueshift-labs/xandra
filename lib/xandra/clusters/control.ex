@@ -132,12 +132,12 @@ defmodule Xandra.Clusters.Control do
           port: port
         } = state
       )
-      when is_nil(address) or is_nil(rpc_address) do
+      when is_nil(address) or is_nil(rpc_address) or address == "" or rpc_address == "" do
     Logger.warning(
-      "Skipping connection attempt due to nil address for cluster [#{cluster_name}] at [#{inspect(rpc_address)}:#{port}]@[#{host_id}], address=#{inspect(address)}. Node likely in joining state, will not retry."
+      "Skipping connection attempt due to nil/empty address for cluster [#{cluster_name}] at [#{inspect(rpc_address)}:#{port}]@[#{host_id}], address=#{inspect(address)}. Node likely in joining state, will not retry."
     )
 
-    # For nil addresses (nodes in joining state), don't retry with backoff
+    # For nil/empty addresses (nodes in joining state), don't retry with backoff
     # Instead, report failure and let the cluster handle it through topology events
     Cluster.report_failure(state.cluster, {cluster_name, host_id, rpc_address, port})
 
