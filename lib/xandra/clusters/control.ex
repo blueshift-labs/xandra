@@ -129,6 +129,28 @@ defmodule Xandra.Clusters.Control do
           host_id: host_id,
           address: address,
           rpc_address: rpc_address,
+          port: port
+        } = state
+      )
+      when is_nil(address) or is_nil(rpc_address) or address == "" or rpc_address == "" do
+    Logger.warning(
+      "Skipping connection attempt due to nil/empty address for cluster [#{cluster_name}] at [#{inspect(rpc_address)}:#{port}]@[#{host_id}], address=#{inspect(address)}. Node likely in joining state, will not retry."
+    )
+
+    # For nil/empty addresses (nodes in joining state), don't retry with backoff
+    # Instead, report failure and let the cluster handle it through topology events
+    Cluster.report_failure(state.cluster, {cluster_name, host_id, rpc_address, port})
+
+    {:ok, %{state | error: {:error, :invalid_address}}}
+  end
+
+  def connect(
+        _,
+        %{
+          cluster_name: cluster_name,
+          host_id: host_id,
+          address: address,
+          rpc_address: rpc_address,
           port: port,
           transport: transport,
           protocol_version: protocol_version,
@@ -219,9 +241,23 @@ defmodule Xandra.Clusters.Control do
         system_peers
         |> Enum.filter(&match?(%{data_center: ^data_center}, &1))
         |> Enum.filter(&cluster_status[&1[:host_id]])
+        |> Enum.filter(&valid_peer_address?/1)
+
+      # Log filtered out peers for debugging
+      invalid_peers =
+        system_peers
+        |> Enum.filter(&match?(%{data_center: ^data_center}, &1))
+        |> Enum.filter(&cluster_status[&1[:host_id]])
+        |> Enum.reject(&valid_peer_address?/1)
+
+      if length(invalid_peers) > 0 do
+        Logger.warning(
+          "Filtered out peers with invalid addresses for cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}]: #{inspect(invalid_peers)}"
+        )
+      end
 
       Logger.debug(
-        "Discovered peers with cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}], [#{inspect(peers)}]"
+        "Discovered peers with cluster [#{cluster_name}] at [#{rpc_address}:#{port}]@[#{host_id}], total=#{length(system_peers)}, valid=#{length(peers)}, peers=[#{inspect(peers)}]"
       )
 
       Enum.each(peers, fn %{host_id: host_id, rpc_address: rpc_address} ->
@@ -447,6 +483,12 @@ defmodule Xandra.Clusters.Control do
       {:ok, Enum.to_list(page)}
     end
   end
+
+  # Made public for testing
+  def valid_peer_address?(%{rpc_address: rpc_address}) when is_nil(rpc_address), do: false
+  def valid_peer_address?(%{rpc_address: rpc_address}) when rpc_address == "", do: false
+  def valid_peer_address?(%{rpc_address: rpc_address}) when rpc_address == "0.0.0.0", do: false
+  def valid_peer_address?(_), do: true
 
   defp startup_control(
          cluster,
