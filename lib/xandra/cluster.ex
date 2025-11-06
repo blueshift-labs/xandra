@@ -367,6 +367,7 @@ defmodule Xandra.Cluster do
         {{{cluster_name, :"$1"}, :"$2", {:"$3", :"$4"}}, [],
          [{{cluster_name, :"$1", :"$2", :"$3", :"$4"}}]}
       ])
+      |> filter_alive_pools()
 
     pool =
       load_balancing
@@ -383,6 +384,12 @@ defmodule Xandra.Cluster do
       _ ->
         fun.(pool)
     end
+  end
+
+  defp filter_alive_pools(pools) do
+    Enum.filter(pools, fn {_cluster_name, _host_id, pool_pid, _rpc_address, _port} ->
+      is_pid(pool_pid) and Process.alive?(pool_pid)
+    end)
   end
 
   defp select_pool(_load_balancing, [], _options), do: nil
