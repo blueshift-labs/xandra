@@ -672,32 +672,6 @@ defmodule Xandra.Clusters.Cluster do
     end
   end
 
-  defp discover_system_peers(
-         transport,
-         socket,
-         protocol_module,
-         %{cluster_name: cluster_name, address: address, port: port}
-       ) do
-    Logger.debug(
-      "Discovering system.peers with cluster [#{cluster_name}] at [#{address}:#{port}]"
-    )
-
-    payload =
-      Frame.new(:query, _options = [])
-      |> protocol_module.encode_request(@system_peers_query)
-      |> Frame.encode(protocol_module)
-
-    protocol_format = Xandra.Protocol.frame_protocol_format(protocol_module)
-
-    with :ok <- transport.send(socket, payload),
-         {:ok, %Frame{} = frame} <-
-           Utils.recv_frame(transport, socket, protocol_format, _compressor = nil),
-         {%Xandra.Page{} = page, _warnings} <-
-           protocol_module.decode_response(%{frame | atom_keys?: true}, @system_peers_query) do
-      {:ok, Enum.to_list(page)}
-    end
-  end
-
   defp discover_system_peers_with_status(
          transport,
          socket,
