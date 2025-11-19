@@ -335,6 +335,7 @@ defmodule Xandra.Cluster do
       |> Keyword.take([:cluster_name, :keyspace, :source])
       |> Enum.reject(&match?({_, nil}, &1))
       |> Enum.into(%{})
+      
     inner_opts = Keyword.delete(options, :retry_strategy)
 
     with_conn_and_retrying(cluster, options, fn conn ->
