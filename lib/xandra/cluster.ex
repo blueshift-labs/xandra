@@ -214,7 +214,7 @@ defmodule Xandra.Cluster do
       )
       |> Keyword.merge(options)
 
-    with_conn_and_retrying(cluster, options, &Xandra.execute(&1, batch, options))
+    execute_with_conn_and_retrying(cluster, options, batch, nil)
   end
 
   @doc """
@@ -266,7 +266,7 @@ defmodule Xandra.Cluster do
       )
       |> Keyword.merge(options)
 
-    with_conn_and_retrying(cluster, options, &Xandra.execute(&1, query, params, options))
+    execute_with_conn_and_retrying(cluster, options, query, params)
   end
 
   @doc """
@@ -326,6 +326,29 @@ defmodule Xandra.Cluster do
       |> Keyword.merge(options)
 
     with_conn(cluster, options, &Xandra.run(&1, options, fun))
+  end
+
+  defp execute_with_conn_and_retrying(cluster, options, query, params) do
+    # Pre-compute metadata and inner_opts outside the hot path
+    metadata =
+      options
+      |> Keyword.take([:cluster_name, :keyspace, :source])
+      |> Enum.reject(&match?({_, nil}, &1))
+      |> Enum.into(%{})
+    inner_opts = Keyword.delete(options, :retry_strategy)
+
+    with_conn_and_retrying(cluster, options, fn conn ->
+      try do
+        case params do
+          nil -> Xandra.execute(conn, query, inner_opts)
+          _ -> Xandra.execute(conn, query, params, inner_opts)
+        end
+      rescue
+        error ->
+          :telemetry.execute([:xandra, :execute, :exception], %{count: 1}, metadata)
+          {:error, error}
+      end
+    end)
   end
 
   defp with_conn_and_retrying(cluster, options, fun) do
