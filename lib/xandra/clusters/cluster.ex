@@ -187,10 +187,23 @@ defmodule Xandra.Clusters.Cluster do
             partitioner: partitioner,
             data_center: data_center
           }} <- discover_system_local(transport, socket, protocol_module, state),
-         {:ok, peers} <- discover_system_peers(transport, socket, protocol_module, state),
+         {:ok, peers} <-
+           discover_system_peers(transport, socket, protocol_module, state),
+         {:ok, cluster_status} <-
+           discover_cluster_status(transport, socket, protocol_module, state),
          :ok <- discover_system_schema(transport, socket, protocol_module, state),
          :ok <- register_to_events(transport, socket, protocol_module, state),
          :ok <- request_system_peers(transport, socket, protocol_module, state) do
+      # Create a map of peer addresses to their status
+      status_map =
+        cluster_status
+        |> Enum.map(fn status_entry ->
+          {status_entry[:peer], status_entry[:up]}
+        end)
+        |> Map.new()
+
+      Logger.debug("Cluster status map for [#{cluster_name}]: #{inspect(status_map)}")
+
       started =
         if peers == [] do
           [
@@ -205,7 +218,30 @@ defmodule Xandra.Clusters.Cluster do
             )
           ]
         else
-          Enum.map(peers, fn %{host_id: host_id, rpc_address: rpc_address} ->
+          peers
+          |> Enum.filter(fn peer ->
+            is_up = Map.get(status_map, peer[:peer], false) == true
+
+            if is_up do
+              Logger.debug("Node [#{peer[:peer]}] is UP, will start connection")
+            else
+              Logger.debug("Node [#{peer[:peer]}] is DOWN or not found, skipping connection")
+
+              # Emit telemetry for down node
+              :telemetry.execute(
+                [:xandra, :cluster, :node_down],
+                %{count: 1},
+                %{
+                  cluster_name: cluster_name,
+                  node: peer[:peer],
+                  host_id: peer[:host_id]
+                }
+              )
+            end
+
+            is_up
+          end)
+          |> Enum.map(fn %{host_id: host_id, peer: rpc_address} ->
             startup_control(
               cluster_name,
               host_id,
@@ -691,6 +727,37 @@ defmodule Xandra.Clusters.Cluster do
            Utils.recv_frame(transport, socket, protocol_format, _compressor = nil),
          {%Xandra.Page{} = page, _warnings} <-
            protocol_module.decode_response(%{frame | atom_keys?: true}, @system_peers_query) do
+      {:ok, Enum.to_list(page)}
+    end
+  end
+
+  defp discover_cluster_status(
+         transport,
+         socket,
+         protocol_module,
+         %{cluster_name: cluster_name, address: address, port: port}
+       ) do
+    Logger.debug("Discovering cluster status [#{cluster_name}] at [#{address}:#{port}]")
+
+    query = %Simple{
+      statement: "SELECT * FROM system.cluster_status",
+      values: [],
+      default_consistency: :one
+    }
+
+    payload =
+      Frame.new(:query, _options = [])
+      |> protocol_module.encode_request(query)
+      |> Frame.encode(protocol_module)
+
+    protocol_format = Xandra.Protocol.frame_protocol_format(protocol_module)
+
+    with :ok <- transport.send(socket, payload),
+         {:ok, %Frame{} = frame} <-
+           Utils.recv_frame(transport, socket, protocol_format, _compressor = nil) do
+      {%Xandra.Page{} = page, _warnings} =
+        protocol_module.decode_response(%{frame | atom_keys?: true}, query)
+
       {:ok, Enum.to_list(page)}
     end
   end
