@@ -567,6 +567,7 @@ defmodule Xandra.Clusters.Cluster do
 
   defp random_connections(cluster_name) do
     Registry.select(ConnectionRegistry, [{{{cluster_name, :_}, :"$1", :_}, [], [{{:"$1"}}]}])
+    |> Enum.filter(fn {conn_pid} -> is_pid(conn_pid) and Process.alive?(conn_pid) end)
     |> Enum.shuffle()
   end
 
